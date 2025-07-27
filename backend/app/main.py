@@ -1,40 +1,35 @@
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from app.api import products, deals, price_history
-from app.database import engine, Base
-from app.config import settings
 
-# Create database tables
+# All the database connection logic is now handled via dependencies.
+from .api import deals, products, price_history
+from .database import Base
+from .dependencies import engine
+
+# This line ensures that if the script is run directly, 
+# the tables are created. It's good practice, though our
+# init_database.py script is the primary way to do this.
 Base.metadata.create_all(bind=engine)
 
+
+# --- FastAPI App Instance ---
 app = FastAPI(
-    title="PCDealTracker API",
-    description="Australian PC hardware price tracking API",
-    version="1.0.0"
+    title="PC Deal Tracker API",
+    description="An API to track prices of PC hardware from various Australian retailers.",
+    version="0.1.0",
 )
 
-# CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# --- Include API Routers ---
+# The endpoints in these routers will use the `get_db` dependency
+# to get a database session.
+app.include_router(products.router)
+app.include_router(deals.router)
+app.include_router(price_history.router)
 
-# Include routers
-app.include_router(products.router, prefix="/api/v1", tags=["products"])
-app.include_router(deals.router, prefix="/api/v1", tags=["deals"])
-app.include_router(price_history.router, prefix="/api/v1", tags=["price-history"])
 
+# --- Root Endpoint ---
 @app.get("/")
-async def root():
-    return {"message": "PCDealTracker API", "version": "1.0.0"}
-
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy"}
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host=settings.api_host, port=settings.api_port)
+def read_root():
+    return {
+        "message": "Welcome to the PC Deal Tracker API!",
+        "docs_url": "/docs"
+    }

@@ -1,184 +1,97 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
 from typing import List, Optional
-from pydantic import BaseModel
-from datetime import datetime
-from app.database import get_db, Product, Category, Retailer
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, ConfigDict
+from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import select
 
-router = APIRouter()
+# Import database models and the session dependency
+from ..database import Product, Category, Retailer
+from ..dependencies import get_db
 
-# Pydantic models for API responses
-class CategoryResponse(BaseModel):
+# --- Pydantic Schemas ---
+# These models define the shape of the data for API requests and responses.
+# They ensure that the data is valid and provide serialization.
+
+class RetailerSchema(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
     id: int
     name: str
-    slug: str
-    
-    class Config:
-        from_attributes = True
+    url: str
 
-class RetailerResponse(BaseModel):
+class CategorySchema(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
     id: int
     name: str
-    website_url: str
-    
-    class Config:
-        from_attributes = True
 
-class ProductResponse(BaseModel):
+class ProductSchema(BaseModel):
+    # This tells Pydantic to read the data even if it is not a dict, but an ORM model.
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     name: str
-    brand: Optional[str]
-    model: Optional[str]
-    current_price: Optional[float]
-    original_price: Optional[float]
-    is_on_sale: bool
-    sale_percentage: Optional[float]
-    in_stock: bool
-    is_deal: bool
-    is_historical_low: bool
-    deal_score: Optional[float]
-    product_url: str
-    image_url: Optional[str]
-    retailer: RetailerResponse
-    category: CategoryResponse
-    last_updated: Optional[datetime]
+    brand: Optional[str] = None
+    model: Optional[str] = None
+    sku: Optional[str] = None
+    url: str
+    current_price: Optional[float] = None
+    on_sale: bool
     
-    class Config:
-        from_attributes = True
+    # These will be populated with the nested schema data
+    retailer: RetailerSchema
+    category: CategorySchema
 
-class ProductListResponse(BaseModel):
-    products: List[ProductResponse]
-    total: int
-    page: int
-    per_page: int
-    total_pages: int
+# --- API Router ---
+# We create a router to group all the product-related endpoints.
+router = APIRouter(
+    prefix="/api/v1/products",
+    tags=["Products"],
+    responses={404: {"description": "Not found"}},
+)
 
-@router.get("/products", response_model=ProductListResponse)
-async def get_products(
+@router.get("/", response_model=List[ProductSchema])
+def read_products(
     db: Session = Depends(get_db),
-    page: int = Query(1, ge=1),
-    per_page: int = Query(20, ge=1, le=100),
-    category_id: Optional[int] = Query(None),
-    retailer_id: Optional[int] = Query(None),
-    brand: Optional[str] = Query(None),
-    min_price: Optional[float] = Query(None, ge=0),
-    max_price: Optional[float] = Query(None, ge=0),
-    on_sale: Optional[bool] = Query(None),
-    deals_only: Optional[bool] = Query(None),
-    in_stock_only: bool = Query(True),
-    search: Optional[str] = Query(None)
+    skip: int = 0,
+    limit: int = 100,
+    category_name: Optional[str] = Query(None, description="Filter by category name, e.g., 'Graphics Cards'"),
+    on_sale: Optional[bool] = Query(None, description="Filter for products that are on sale")
 ):
-    """Get products with filtering and pagination"""
-    
-    query = db.query(Product).filter(Product.is_active == True)
-    
-    # Apply filters
-    if category_id:
-        query = query.filter(Product.category_id == category_id)
-    
-    if retailer_id:
-        query = query.filter(Product.retailer_id == retailer_id)
-    
-    if brand:
-        query = query.filter(Product.brand.ilike(f"%{brand}%"))
-    
-    if min_price is not None:
-        query = query.filter(Product.current_price >= min_price)
-    
-    if max_price is not None:
-        query = query.filter(Product.current_price <= max_price)
-    
-    if on_sale is not None:
-        query = query.filter(Product.is_on_sale == on_sale)
-    
-    if deals_only:
-        query = query.filter(Product.is_deal == True)
-    
-    if in_stock_only:
-        query = query.filter(Product.in_stock == True)
-    
-    if search:
-        search_term = f"%{search}%"
-        query = query.filter(
-            Product.name.ilike(search_term) | 
-            Product.brand.ilike(search_term) |
-            Product.model.ilike(search_term)
-        )
-    
-    # Get total count
-    total = query.count()
-    
-    # Apply pagination
-    offset = (page - 1) * per_page
-    products = query.offset(offset).limit(per_page).all()
-    
-    # Calculate pagination info
-    total_pages = (total + per_page - 1) // per_page
-    
-    return ProductListResponse(
-        products=products,
-        total=total,
-        page=page,
-        per_page=per_page,
-        total_pages=total_pages
+    """
+    Retrieve a list of products with optional filtering and pagination.
+    """
+    query = (
+        select(Product)
+        .options(joinedload(Product.retailer), joinedload(Product.category))
+        .order_by(Product.id)
     )
 
-@router.get("/products/{product_id}", response_model=ProductResponse)
-async def get_product(product_id: int, db: Session = Depends(get_db)):
-    """Get a specific product by ID"""
+    # Apply filters conditionally
+    if category_name:
+        query = query.join(Category).where(Category.name == category_name)
     
-    product = db.query(Product).filter(
-        Product.id == product_id,
-        Product.is_active == True
-    ).first()
+    if on_sale is not None:
+        query = query.where(Product.on_sale == on_sale)
+
+    # Apply pagination
+    query = query.offset(skip).limit(limit)
     
-    if not product:
+    products = db.execute(query).scalars().all()
+    return products
+
+
+@router.get("/{product_id}", response_model=ProductSchema)
+def read_product(product_id: int, db: Session = Depends(get_db)):
+    """
+    Retrieve a single product by its ID.
+    """
+    # We use joinedload to efficiently fetch the related retailer and category in the same query.
+    product = db.query(Product).options(
+        joinedload(Product.retailer), 
+        joinedload(Product.category)
+    ).filter(Product.id == product_id).first()
+
+    if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
     
     return product
 
-@router.get("/categories", response_model=List[CategoryResponse])
-async def get_categories(db: Session = Depends(get_db)):
-    """Get all product categories"""
-    
-    categories = db.query(Category).all()
-    return categories
-
-@router.get("/retailers", response_model=List[RetailerResponse])
-async def get_retailers(db: Session = Depends(get_db)):
-    """Get all retailers"""
-    
-    retailers = db.query(Retailer).filter(Retailer.is_active == True).all()
-    return retailers
-
-@router.get("/products/{product_id}/similar")
-async def get_similar_products(
-    product_id: int, 
-    db: Session = Depends(get_db),
-    limit: int = Query(5, ge=1, le=20)
-):
-    """Get similar products based on category and brand"""
-    
-    # Get the original product
-    product = db.query(Product).filter(Product.id == product_id).first()
-    
-    if not product:
-        raise HTTPException(status_code=404, detail="Product not found")
-    
-    # Find similar products (same category, preferably same brand)
-    similar_query = db.query(Product).filter(
-        Product.id != product_id,
-        Product.category_id == product.category_id,
-        Product.is_active == True,
-        Product.in_stock == True
-    )
-    
-    # Prioritize same brand
-    if product.brand:
-        same_brand = similar_query.filter(Product.brand == product.brand).limit(limit//2).all()
-        different_brand = similar_query.filter(Product.brand != product.brand).limit(limit - len(same_brand)).all()
-        similar_products = same_brand + different_brand
-    else:
-        similar_products = similar_query.limit(limit).all()
-    
-    return {"similar_products": similar_products[:limit]}

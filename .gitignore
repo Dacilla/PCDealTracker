@@ -70,3 +70,22 @@ coverage.xml
 
 # Docker
 .dockerignore
+
+# Virtual Environment
+venv/
+.venv/
+
+# Python cache files
+__pycache__/
+*.pyc
+
+# Environment variables
+.env
+
+# Local Database
+pc_deals.db
+
+# Temporary debug files
+debug_screenshot.png
+debug_page_content.html
+pccg_hub_page.html
