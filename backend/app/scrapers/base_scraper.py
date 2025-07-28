@@ -5,11 +5,12 @@ from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
 from sqlalchemy.orm import Session
 import time
+import datetime # Import the datetime module
 
 class BaseScraper:
     """
     A base class for web scrapers using undetected-chromedriver with a flexible,
-    explicit waiting strategy and enhanced debugging.
+    explicit waiting strategy and enhanced, non-destructive debugging.
     """
     def __init__(self, db_session: Session):
         self.db_session = db_session
@@ -37,32 +38,37 @@ class BaseScraper:
             return None
             
         try:
-            print(f"Navigating to {url}...")
-            self.driver.get(url)
+            # Handle cases where we don't need to navigate (e.g., pagination)
+            if url:
+                print(f"Navigating to {url}...")
+                self.driver.get(url)
             
             print(f"Waiting for selector '{wait_for_selector}' to be present...")
-            # Reduced timeout to 15 seconds as requested.
             wait = WebDriverWait(self.driver, 15)
             wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, wait_for_selector)))
             print("Selector found. Page is ready.")
 
-            time.sleep(2)
+            time.sleep(1)
             
             return BeautifulSoup(self.driver.page_source, 'html.parser')
 
         except Exception as e:
-            print(f"Error fetching or waiting for content at {url}.")
+            print(f"Error fetching or waiting for content at {url or self.driver.current_url}.")
             print(f"Underlying error: {e}")
             
-            # --- Enhanced Debugging ---
-            # Save both a screenshot and the raw HTML for inspection.
+            # --- ENHANCED DEBUGGING ---
+            # Create a unique timestamp for each error's log files.
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            screenshot_filename = f"debug_screenshot_{timestamp}.png"
+            html_filename = f"debug_page_content_{timestamp}.html"
+            
             try:
-                self.driver.save_screenshot('debug_screenshot.png')
-                print("Saved a screenshot to debug_screenshot.png for inspection.")
+                self.driver.save_screenshot(screenshot_filename)
+                print(f"Saved a screenshot to {screenshot_filename} for inspection.")
                 
-                with open("debug_page_content.html", "w", encoding="utf-8") as f:
+                with open(html_filename, "w", encoding="utf-8") as f:
                     f.write(self.driver.page_source)
-                print("Saved the page HTML to debug_page_content.html for inspection.")
+                print(f"Saved the page HTML to {html_filename} for inspection.")
 
             except Exception as se:
                 print(f"Could not save debug files: {se}")

@@ -6,26 +6,28 @@ import time
 from .base_scraper import BaseScraper
 from ..database import Product, Retailer, Category, PriceHistory, ProductStatus
 
+CATEGORY_URL_MAP = {
+    "Graphics Cards": "https://www.pccasegear.com/category/193/graphics-cards",
+    "CPUs": "https://www.pccasegear.com/category/187/cpus",
+    "Motherboards": "https://www.pccasegear.com/category/138/motherboards",
+    "Memory (RAM)": "https://www.pccasegear.com/category/186/memory",
+    "Storage (SSD/HDD)": "https://www.pccasegear.com/category/210/hard-drives-ssds",
+    "Power Supplies": "https://www.pccasegear.com/category/15/power-supplies",
+    "PC Cases": "https://www.pccasegear.com/category/25/cases",
+    "Monitors": "https://www.pccasegear.com/category/558/monitors",
+    "Cooling": "https://www.pccasegear.com/category/207/cooling",
+    "Fans & Accessories": "https://www.pccasegear.com/category/9/fans-accessories",
+}
+
 class PCCGScraper(BaseScraper):
-    """
-    A scraper for PC Case Gear that handles multiple page layouts and non-numeric prices.
-    """
     def __init__(self, db_session: Session):
         super().__init__(db_session)
         self.retailer = self.db_session.execute(
             select(Retailer).where(Retailer.name == "PC Case Gear")
         ).scalar_one()
-        self.parent_category = self.db_session.execute(
-            select(Category).where(Category.name == "Graphics Cards")
-        ).scalar_one()
 
-    def scrape_products_from_page(self, page_url: str):
-        """
-        Scrapes all product details from a single product listing page,
-        handling different possible HTML structures.
-        """
+    def scrape_products_from_page(self, page_url: str, category: Category):
         print(f"Scraping product page: {page_url}")
-        
         soup = self.get_page_content(page_url, wait_for_selector="footer")
         if not soup:
             print(f"Failed to get content from {page_url}")
@@ -36,114 +38,93 @@ class PCCGScraper(BaseScraper):
 
         if product_list_layout1:
             print(f"Found {len(product_list_layout1)} products using layout 1.")
-            self.parse_layout_1(product_list_layout1)
+            self.parse_and_save(product_list_layout1, '[data-product-card-title] a', '[data-product-price-current]', '[data-product-card-image] img', category)
         elif product_list_layout2:
             print(f"Found {len(product_list_layout2)} products using layout 2.")
-            self.parse_layout_2(product_list_layout2)
+            self.parse_and_save(product_list_layout2, '.product-title', '.price', '.product-image img', category)
         else:
             print("No known product layout found on this page. Skipping.")
 
         self.db_session.commit()
         print("Committing changes for this page.")
 
-    def parse_layout_1(self, items):
-        """Parses the layout that uses 'data-*' attributes."""
+    def parse_and_save(self, items, name_selector, price_selector, image_selector, category):
         for item in items:
-            name_element = item.select_one('[data-product-card-title] a')
-            price_element = item.select_one('[data-product-price-current]')
-            if name_element and price_element:
-                self.save_product_data(name_element, price_element)
-
-    def parse_layout_2(self, items):
-        """Parses the layout found on the Accessories page."""
-        for item in items:
-            name_element = item.select_one('.product-title')
-            price_element = item.select_one('.price')
-            if name_element and price_element:
-                self.save_product_data(name_element, price_element)
-
-    def save_product_data(self, name_element, price_element):
-        """Extracts and saves product data to the database, handling TBA prices."""
-        try:
-            product_name = name_element.get_text(strip=True)
-            product_url_suffix = name_element.get('href', name_element.find('a')['href'] if name_element.find('a') else None)
-            if not product_url_suffix: return
-
-            product_url = "https://www.pccasegear.com" + product_url_suffix
-            price_str = price_element.get_text(strip=True).replace("$", "").replace(",", "")
-            
-            price = None
-            status = ProductStatus.AVAILABLE
             try:
-                price = float(price_str)
-            except ValueError:
-                print(f"  Could not parse price '{price_str}' for {product_name}. Setting price to None.")
-                status = ProductStatus.UNAVAILABLE
+                name_element = item.select_one(name_selector)
+                price_element = item.select_one(price_selector)
+                image_element = item.select_one(image_selector)
+                if not name_element or not price_element: continue
 
-            existing_product = self.db_session.execute(
-                select(Product).where(Product.url == product_url)
-            ).scalar_one_or_none()
+                product_name = name_element.get_text(strip=True)
+                product_url_suffix = name_element.get('href', name_element.find('a')['href'] if name_element.find('a') else None)
+                if not product_url_suffix: continue
 
-            if existing_product:
-                if existing_product.current_price != price:
-                    print(f"  Updating price for: {product_name}")
-                    existing_product.current_price = price
-                    existing_product.status = status
+                product_url = "https://www.pccasegear.com" + product_url_suffix
+                image_url = image_element.get('src') if image_element else None
+                price_str = price_element.get_text(strip=True).replace("$", "").replace(",", "")
+                
+                price, status = (None, ProductStatus.UNAVAILABLE)
+                try:
+                    price = float(price_str)
+                    status = ProductStatus.AVAILABLE
+                except ValueError:
+                    print(f"  Could not parse price '{price_str}' for {product_name}.")
+
+                existing_product = self.db_session.execute(select(Product).where(Product.url == product_url)).scalar_one_or_none()
+
+                if existing_product:
+                    if existing_product.current_price != price or existing_product.image_url != image_url:
+                        print(f"  Updating: {product_name}")
+                        existing_product.current_price = price
+                        existing_product.image_url = image_url
+                        existing_product.status = status
+                        if price is not None:
+                            self.db_session.add(PriceHistory(product_id=existing_product.id, price=price))
+                else:
+                    print(f"  Adding new product: {product_name}")
+                    new_product = Product(
+                        name=product_name, url=product_url, current_price=price, image_url=image_url,
+                        retailer_id=self.retailer.id, category_id=category.id, 
+                        on_sale=False, status=status
+                    )
+                    self.db_session.add(new_product)
                     if price is not None:
-                        history_entry = PriceHistory(product_id=existing_product.id, price=price)
-                        self.db_session.add(history_entry)
-            else:
-                print(f"  Adding new product: {product_name}")
-                new_product = Product(
-                    name=product_name, url=product_url, current_price=price,
-                    retailer_id=self.retailer.id, category_id=self.parent_category.id, 
-                    on_sale=False, status=status
-                )
-                self.db_session.add(new_product)
-                if price is not None:
-                    self.db_session.flush() 
-                    history_entry = PriceHistory(product_id=new_product.id, price=price)
-                    self.db_session.add(history_entry)
-        except (ValueError, TypeError, AttributeError, KeyError) as e:
-            print(f"  Could not parse an item. Error: {e}")
+                        self.db_session.flush() 
+                        self.db_session.add(PriceHistory(product_id=new_product.id, price=price))
+            except Exception as e:
+                print(f"  Could not parse an item. Error: {e}")
 
     def run(self):
-        """
-        Main scraping process. First finds sub-category links, then scrapes each one.
-        """
-        print(f"Starting scraper for {self.retailer.name} - {self.parent_category.name}")
-        
-        main_category_url = "https://www.pccasegear.com/category/193/graphics-cards"
-        soup = self.get_page_content(main_category_url, wait_for_selector=".prdct_box_sec")
+        for category_name, main_category_url in CATEGORY_URL_MAP.items():
+            print(f"\n{'='*20}\nStarting scrape for category: {category_name}\n{'='*20}")
+            category_obj = self.db_session.execute(select(Category).where(Category.name == category_name)).scalar_one_or_none()
+            if not category_obj:
+                print(f"Category '{category_name}' not found. Skipping.")
+                continue
 
-        if not soup:
-            print("Failed to retrieve main category page. Aborting.")
-            return
+            # This call now correctly includes the wait_for_selector argument
+            soup = self.get_page_content(main_category_url, wait_for_selector=".prdct_box_sec")
+            if not soup:
+                print(f"Failed to retrieve main page for {category_name}. Skipping.")
+                continue
 
-        subcategory_cards = soup.select('.prdct_box a')
-        
-        subcategory_urls = set()
-        for card in subcategory_cards:
-            href = card.get('href')
-            if href and '/category/193_' in href:
-                subcategory_urls.add(href)
+            subcategory_cards = soup.select('.prdct_box a')
+            subcategory_urls = {card.get('href') for card in subcategory_cards if card.get('href') and '/category/' in card.get('href')}
 
-        if not subcategory_urls:
-            print("Could not find any sub-category links after filtering. The website layout may have changed.")
-            return
+            if not subcategory_urls:
+                print("No sub-categories found. Scraping main page directly.")
+                self.scrape_products_from_page(main_category_url, category_obj)
+                continue
             
-        print(f"Found {len(subcategory_urls)} sub-categories to scrape.")
-
-        for url in sorted(list(subcategory_urls)):
-            print(f"\n--- Navigating to sub-category: {url} ---")
-            self.scrape_products_from_page(url)
-            time.sleep(3)
-
+            print(f"Found {len(subcategory_urls)} sub-categories.")
+            for url in sorted(list(subcategory_urls)):
+                print(f"\n--- Navigating to sub-category: {url} ---")
+                self.scrape_products_from_page(url, category_obj)
+                time.sleep(1)
 
 def run_pccg_scraper():
-    """A standalone function to initialize the database session and run the scraper."""
     from ..dependencies import SessionLocal
-    
     print("Initializing DB session for scraper...")
     db_session = SessionLocal()
     scraper = None
@@ -151,7 +132,7 @@ def run_pccg_scraper():
         scraper = PCCGScraper(db_session)
         scraper.run()
     except Exception as e:
-        print(f"\nAn error occurred during the scraping process: {e}")
+        print(f"\nAn error occurred: {e}")
     finally:
         if scraper:
             scraper.close()

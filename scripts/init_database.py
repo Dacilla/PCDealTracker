@@ -8,10 +8,12 @@ from sqlalchemy.orm import sessionmaker
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend.app.database import Base, Retailer, Category
-# Correctly import the 'settings' object.
 from backend.app.config import settings
 
 # --- Initial Data ---
+# This is the foundational data for the application.
+# It can be easily expanded in the future.
+
 RETAILERS = [
     {"name": "PC Case Gear", "url": "https://www.pccasegear.com"},
     {"name": "Scorptec", "url": "https://www.scorptec.com.au"},
@@ -23,13 +25,16 @@ RETAILERS = [
 
 CATEGORIES = [
     {"name": "Graphics Cards"},
-    {"name": "Processors"},
+    # --- CORRECTED NAME ---
+    {"name": "CPUs"}, 
     {"name": "Motherboards"},
     {"name": "Memory (RAM)"},
     {"name": "Storage (SSD/HDD)"},
     {"name": "Power Supplies"},
     {"name": "PC Cases"},
     {"name": "Monitors"},
+    {"name": "Cooling"},
+    {"name": "Fans & Accessories"},
 ]
 
 def setup_database():

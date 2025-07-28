@@ -86,6 +86,6 @@ __pycache__/
 pc_deals.db
 
 # Temporary debug files
-debug_screenshot.png
-debug_page_content.html
+debug_*.png
+debug_*.html
 pccg_hub_page.html

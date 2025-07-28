@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PC Deal Tracker</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .spinner {
+            border: 4px solid rgba(255, 255, 255, 0.1);
+            border-left-color: #3b82f6;
+            border-radius: 50%;
+            width: 2rem;
+            height: 2rem;
+            animation: spin 1s linear infinite;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-200">
+
+    <header class="bg-gray-800 shadow-lg border-b border-gray-700">
+        <div class="container mx-auto px-4 py-4 flex justify-between items-center">
+            <h1 class="text-2xl font-bold text-blue-500">PC Deal Tracker</h1>
+            <nav>
+                <a href="#" class="text-gray-300 hover:text-blue-500 px-3 py-2 rounded-md font-medium">Products</a>
+                <a href="#" class="text-gray-300 hover:text-blue-500 px-3 py-2 rounded-md font-medium">Deals</a>
+            </nav>
+        </div>
+    </header>
+
+    <main class="container mx-auto px-4 py-8">
+        <h2 class="text-3xl font-bold mb-6 text-white">Latest Products</h2>
+
+        <!-- NEW: Filter Controls -->
+        <div class="bg-gray-800 p-4 rounded-lg mb-6 flex flex-col sm:flex-row gap-4">
+            <div class="flex-1">
+                <label for="category-filter" class="block text-sm font-medium text-gray-400 mb-1">Category</label>
+                <select id="category-filter" class="w-full bg-gray-700 border border-gray-600 text-white rounded-md p-2 focus:ring-blue-500 focus:border-blue-500">
+                    <option value="">All Categories</option>
+                    <!-- Options populated by JavaScript -->
+                </select>
+            </div>
+            <div class="flex-1">
+                <label for="retailer-filter" class="block text-sm font-medium text-gray-400 mb-1">Retailer</label>
+                <select id="retailer-filter" class="w-full bg-gray-700 border border-gray-600 text-white rounded-md p-2 focus:ring-blue-500 focus:border-blue-500">
+                    <option value="">All Retailers</option>
+                    <!-- Options populated by JavaScript -->
+                </select>
+            </div>
+        </div>
+        <!-- END NEW -->
+
+        <div id="loading" class="flex justify-center items-center h-64">
+            <div class="spinner"></div>
+            <p class="ml-4 text-gray-400">Fetching latest deals...</p>
+        </div>
+
+        <div id="error-message" class="hidden bg-red-900 border border-red-700 text-red-300 px-4 py-3 rounded-lg" role="alert">
+            <strong class="font-bold">Error!</strong>
+            <span class="block sm:inline">Could not connect to the API. Please make sure the backend server is running.</span>
+        </div>
+
+        <div id="product-grid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6"></div>
+    </main>
+
+    <script>
+        const API_BASE_URL = 'http://127.0.0.1:8000';
+        const productGrid = document.getElementById('product-grid');
+        const loadingIndicator = document.getElementById('loading');
+        const errorMessage = document.getElementById('error-message');
+        const categoryFilter = document.getElementById('category-filter');
+        const retailerFilter = document.getElementById('retailer-filter');
+
+        function createProductCard(product) {
+            const price = product.current_price ? `$${product.current_price.toFixed(2)}` : 'Price TBA';
+            const placeholderSvg = `<div class="h-full w-full flex items-center justify-center bg-gray-700"><svg class="w-12 h-12 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg></div>`;
+            const imageHtml = product.image_url ? `<img src="${product.image_url}" alt="${product.name}" class="h-full w-full object-contain" onerror="this.onerror=null; this.parentElement.innerHTML = '${placeholderSvg.replace(/\n/g, "").replace(/'/g, "\\'")}';">` : placeholderSvg;
+
+            return `<div class="bg-gray-800 rounded-lg shadow-lg overflow-hidden transform hover:-translate-y-1 transition-transform duration-300 flex flex-col"><div class="h-48 flex-shrink-0 bg-gray-700">${imageHtml}</div><div class="p-4 flex flex-col flex-grow"><h3 class="font-semibold text-lg text-gray-100 truncate flex-grow" title="${product.name}">${product.name}</h3><p class="text-gray-400 text-sm mt-1">${product.retailer.name}</p><div class="mt-4 flex justify-between items-center"><span class="font-bold text-xl text-blue-500">${price}</span><a href="${product.url}" target="_blank" class="text-sm bg-blue-600 text-white py-1 px-3 rounded-full hover:bg-blue-700 transition-colors">View</a></div></div></div>`;
+        }
+        
+        async function fetchAndDisplayProducts() {
+            loadingIndicator.style.display = 'flex';
+            errorMessage.classList.add('hidden');
+            productGrid.innerHTML = '';
+
+            // Build the query URL based on filter selections
+            const params = new URLSearchParams();
+            if (categoryFilter.value) params.append('category_name', categoryFilter.value);
+            if (retailerFilter.value) params.append('retailer_name', retailerFilter.value);
+            params.append('limit', 100);
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/v1/products?${params.toString()}`);
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                const products = await response.json();
+                
+                if (products.length === 0) {
+                    productGrid.innerHTML = '<p class="text-gray-400 col-span-full text-center">No products match the current filters.</p>';
+                } else {
+                    products.forEach(product => productGrid.innerHTML += createProductCard(product));
+                }
+            } catch (error) {
+                console.error("Failed to fetch products:", error);
+                errorMessage.classList.remove('hidden');
+            } finally {
+                loadingIndicator.style.display = 'none';
+            }
+        }
+
+        async function populateFilters() {
+            try {
+                // Fetch and populate categories
+                const catResponse = await fetch(`${API_BASE_URL}/api/v1/categories`);
+                const categories = await catResponse.json();
+                categories.forEach(cat => {
+                    const option = document.createElement('option');
+                    option.value = cat.name;
+                    option.textContent = cat.name;
+                    categoryFilter.appendChild(option);
+                });
+
+                // Fetch and populate retailers
+                const retResponse = await fetch(`${API_BASE_URL}/api/v1/retailers`);
+                const retailers = await retResponse.json();
+                retailers.forEach(ret => {
+                    const option = document.createElement('option');
+                    option.value = ret.name;
+                    option.textContent = ret.name;
+                    retailerFilter.appendChild(option);
+                });
+            } catch (error) {
+                console.error("Failed to populate filters:", error);
+                errorMessage.classList.add('hidden');
+            }
+        }
+
+        // --- Initial Load ---
+        document.addEventListener('DOMContentLoaded', async () => {
+            await populateFilters();
+            await fetchAndDisplayProducts();
+
+            // Add event listeners to trigger refetch when filters change
+            categoryFilter.addEventListener('change', fetchAndDisplayProducts);
+            retailerFilter.addEventListener('change', fetchAndDisplayProducts);
+        });
+    </script>
+</body>
+</html>
