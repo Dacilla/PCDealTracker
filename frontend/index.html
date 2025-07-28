@@ -36,24 +36,20 @@
     <main class="container mx-auto px-4 py-8">
         <h2 class="text-3xl font-bold mb-6 text-white">Latest Products</h2>
 
-        <!-- NEW: Filter Controls -->
         <div class="bg-gray-800 p-4 rounded-lg mb-6 flex flex-col sm:flex-row gap-4">
             <div class="flex-1">
                 <label for="category-filter" class="block text-sm font-medium text-gray-400 mb-1">Category</label>
                 <select id="category-filter" class="w-full bg-gray-700 border border-gray-600 text-white rounded-md p-2 focus:ring-blue-500 focus:border-blue-500">
                     <option value="">All Categories</option>
-                    <!-- Options populated by JavaScript -->
                 </select>
             </div>
             <div class="flex-1">
                 <label for="retailer-filter" class="block text-sm font-medium text-gray-400 mb-1">Retailer</label>
                 <select id="retailer-filter" class="w-full bg-gray-700 border border-gray-600 text-white rounded-md p-2 focus:ring-blue-500 focus:border-blue-500">
                     <option value="">All Retailers</option>
-                    <!-- Options populated by JavaScript -->
                 </select>
             </div>
         </div>
-        <!-- END NEW -->
 
         <div id="loading" class="flex justify-center items-center h-64">
             <div class="spinner"></div>
@@ -78,10 +74,31 @@
 
         function createProductCard(product) {
             const price = product.current_price ? `$${product.current_price.toFixed(2)}` : 'Price TBA';
-            const placeholderSvg = `<div class="h-full w-full flex items-center justify-center bg-gray-700"><svg class="w-12 h-12 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg></div>`;
-            const imageHtml = product.image_url ? `<img src="${product.image_url}" alt="${product.name}" class="h-full w-full object-contain" onerror="this.onerror=null; this.parentElement.innerHTML = '${placeholderSvg.replace(/\n/g, "").replace(/'/g, "\\'")}';">` : placeholderSvg;
+            
+            const placeholderSvg = `
+                <div class="h-full w-full flex items-center justify-center bg-gray-700">
+                    <svg class="w-12 h-12 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                </div>`;
 
-            return `<div class="bg-gray-800 rounded-lg shadow-lg overflow-hidden transform hover:-translate-y-1 transition-transform duration-300 flex flex-col"><div class="h-48 flex-shrink-0 bg-gray-700">${imageHtml}</div><div class="p-4 flex flex-col flex-grow"><h3 class="font-semibold text-lg text-gray-100 truncate flex-grow" title="${product.name}">${product.name}</h3><p class="text-gray-400 text-sm mt-1">${product.retailer.name}</p><div class="mt-4 flex justify-between items-center"><span class="font-bold text-xl text-blue-500">${price}</span><a href="${product.url}" target="_blank" class="text-sm bg-blue-600 text-white py-1 px-3 rounded-full hover:bg-blue-700 transition-colors">View</a></div></div></div>`;
+            const imageHtml = product.image_url 
+                ? `<img src="${product.image_url}" alt="${product.name}" class="h-full w-full object-contain" onerror="this.onerror=null; this.parentElement.innerHTML = '${placeholderSvg.replace(/\n/g, "").replace(/'/g, "\\'")}';">`
+                : placeholderSvg;
+
+            return `
+                <div class="bg-gray-800 rounded-lg shadow-lg overflow-hidden flex flex-col transform hover:-translate-y-1 transition-transform duration-300">
+                    <div class="h-48 flex-shrink-0 bg-white flex items-center justify-center">${imageHtml}</div>
+                    <div class="p-4 flex flex-col flex-grow">
+                        <h3 class="font-semibold text-lg text-gray-100 flex-grow" title="${product.name}">${product.name}</h3>
+                        <p class="text-gray-400 text-sm mt-1">${product.retailer.name}</p>
+                        <div class="mt-4 flex justify-between items-center">
+                            <span class="font-bold text-xl text-blue-500">${price}</span>
+                            <a href="${product.url}" target="_blank" class="text-sm bg-blue-600 text-white py-1 px-3 rounded-full hover:bg-blue-700 transition-colors">
+                                View
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            `;
         }
         
         async function fetchAndDisplayProducts() {
@@ -89,7 +106,6 @@
             errorMessage.classList.add('hidden');
             productGrid.innerHTML = '';
 
-            // Build the query URL based on filter selections
             const params = new URLSearchParams();
             if (categoryFilter.value) params.append('category_name', categoryFilter.value);
             if (retailerFilter.value) params.append('retailer_name', retailerFilter.value);
@@ -115,7 +131,6 @@
 
         async function populateFilters() {
             try {
-                // Fetch and populate categories
                 const catResponse = await fetch(`${API_BASE_URL}/api/v1/categories`);
                 const categories = await catResponse.json();
                 categories.forEach(cat => {
@@ -125,7 +140,6 @@
                     categoryFilter.appendChild(option);
                 });
 
-                // Fetch and populate retailers
                 const retResponse = await fetch(`${API_BASE_URL}/api/v1/retailers`);
                 const retailers = await retResponse.json();
                 retailers.forEach(ret => {
@@ -140,12 +154,10 @@
             }
         }
 
-        // --- Initial Load ---
         document.addEventListener('DOMContentLoaded', async () => {
             await populateFilters();
             await fetchAndDisplayProducts();
 
-            // Add event listeners to trigger refetch when filters change
             categoryFilter.addEventListener('change', fetchAndDisplayProducts);
             retailerFilter.addEventListener('change', fetchAndDisplayProducts);
         });

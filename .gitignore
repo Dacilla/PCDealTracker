@@ -89,3 +89,4 @@ pc_deals.db
 debug_*.png
 debug_*.html
 pccg_hub_page.html
+*output.xml

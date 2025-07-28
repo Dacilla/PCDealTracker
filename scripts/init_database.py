@@ -3,16 +3,10 @@ import sys
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
-# This is a bit of a hack to allow this script to import from the 'backend' directory.
-# It adds the parent directory of 'scripts' to Python's path.
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend.app.database import Base, Retailer, Category
 from backend.app.config import settings
-
-# --- Initial Data ---
-# This is the foundational data for the application.
-# It can be easily expanded in the future.
 
 RETAILERS = [
     {"name": "PC Case Gear", "url": "https://www.pccasegear.com"},
@@ -25,7 +19,6 @@ RETAILERS = [
 
 CATEGORIES = [
     {"name": "Graphics Cards"},
-    # --- CORRECTED NAME ---
     {"name": "CPUs"}, 
     {"name": "Motherboards"},
     {"name": "Memory (RAM)"},
@@ -34,15 +27,11 @@ CATEGORIES = [
     {"name": "PC Cases"},
     {"name": "Monitors"},
     {"name": "Cooling"},
-    {"name": "Fans & Accessories"},
+    # "Fans & Accessories" removed
 ]
 
 def setup_database():
-    """
-    Sets up the database by creating tables and seeding initial data.
-    """
     print("Connecting to the database...")
-    # Use the imported settings object directly.
     engine = create_engine(settings.database_url, echo=False)
     
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -53,7 +42,6 @@ def setup_database():
         Base.metadata.create_all(bind=engine)
         print("Tables created successfully.")
 
-        # --- Seed Retailers ---
         print("\nSeeding retailers...")
         for retailer_data in RETAILERS:
             exists = session.execute(
@@ -67,7 +55,6 @@ def setup_database():
             else:
                 print(f"  Skipped (already exists): {retailer_data['name']}")
         
-        # --- Seed Categories ---
         print("\nSeeding categories...")
         for category_data in CATEGORIES:
             exists = session.execute(
