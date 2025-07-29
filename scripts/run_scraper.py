@@ -13,20 +13,20 @@ if __name__ == "__main__":
     print("--- Starting All Scrapers Sequentially ---")
     
     # --- Run PC Case Gear Scraper (Commented out for testing) ---
-    try:
-        print("\n--- Running PC Case Gear Scraper ---")
-        run_pccg_scraper()
-        print("\n--- PC Case Gear Scraper Finished ---")
-    except Exception as e:
-        print(f"\n--- PC Case Gear Scraper Failed: {e} ---")
+    # try:
+    #     print("\n--- Running PC Case Gear Scraper ---")
+    #     run_pccg_scraper()
+    #     print("\n--- PC Case Gear Scraper Finished ---")
+    # except Exception as e:
+    #     print(f"\n--- PC Case Gear Scraper Failed: {e} ---")
 
-    # --- Run Scorptec Scraper (Commented out for testing) ---
-    try:
-        print("\n--- Running Scorptec Scraper ---")
-        run_scorptec_scraper()
-        print("\n--- Scorptec Scraper Finished ---")
-    except Exception as e:
-        print(f"\n--- Scorptec Scraper Failed: {e} ---")
+    # # --- Run Scorptec Scraper (Commented out for testing) ---
+    # try:
+    #     print("\n--- Running Scorptec Scraper ---")
+    #     run_scorptec_scraper()
+    #     print("\n--- Scorptec Scraper Finished ---")
+    # except Exception as e:
+    #     print(f"\n--- Scorptec Scraper Failed: {e} ---")
 
     # --- Run Centre Com Scraper ---
     try:
