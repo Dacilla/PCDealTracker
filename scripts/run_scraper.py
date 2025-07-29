@@ -9,6 +9,7 @@ from backend.app.scrapers.pccg_scraper import run_pccg_scraper
 from backend.app.scrapers.scorptec_scraper import run_scorptec_scraper
 from backend.app.scrapers.centrecom_scraper import run_centrecom_scraper
 from backend.app.scrapers.msy_scraper import run_msy_scraper
+from backend.app.scrapers.umart_scraper import run_umart_scraper
 
 if __name__ == "__main__":
     print("--- Starting All Scrapers Sequentially ---")
@@ -37,12 +38,20 @@ if __name__ == "__main__":
     # except Exception as e:
     #     print(f"\n--- Centre Com Scraper Failed: {e} ---")
 
-    # --- Run MSY Scraper ---
+    # # --- Run MSY Scraper ---
+    # try:
+    #     print("\n--- Running MSY Scraper ---")
+    #     run_msy_scraper()
+    #     print("\n--- MSY Scraper Finished ---")
+    # except Exception as e:
+    #     print(f"\n--- MSY Scraper Failed: {e} ---")
+
+    # --- Run Umart Scraper ---
     try:
-        print("\n--- Running MSY Scraper ---")
-        run_msy_scraper()
-        print("\n--- MSY Scraper Finished ---")
+        print("\n--- Running Umart Scraper ---")
+        run_umart_scraper()
+        print("\n--- Umart Scraper Finished ---")
     except Exception as e:
-        print(f"\n--- MSY Scraper Failed: {e} ---")
+        print(f"\n--- Umart Scraper Failed: {e} ---")
     
     print("\n--- All Scrapers Finished ---")
