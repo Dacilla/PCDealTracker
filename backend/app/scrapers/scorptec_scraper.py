@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 import time
+from urllib.parse import urljoin
 from selenium.common.exceptions import NoSuchElementException, TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -10,7 +11,6 @@ from bs4 import BeautifulSoup
 from .base_scraper import BaseScraper
 from ..database import Product, Retailer, Category, PriceHistory, ProductStatus
 
-# This map defines which URL on the retailer's site corresponds to which main category in our DB.
 CATEGORY_URL_MAP = {
     "Graphics Cards": "https://www.scorptec.com.au/product/graphics-cards",
     "CPUs": "https://www.scorptec.com.au/product/cpu",
@@ -21,11 +21,8 @@ CATEGORY_URL_MAP = {
     "PC Cases": "https://www.scorptec.com.au/product/cases",
     "Monitors": "https://www.scorptec.com.au/product/monitors",
     "Cooling": "https://www.scorptec.com.au/product/cooling",
-    # Note: We intentionally omit "Fans & Accessories" here because Scorptec groups it under "Cooling".
 }
 
-# --- NEW: Sub-category to DB Category Mapping ---
-# This helps us correctly categorize products from a broad hub page.
 SUBCATEGORY_DB_MAP = {
     'cpu-coolers': 'Cooling',
     'fans': 'Fans & Accessories',
@@ -41,6 +38,7 @@ class ScorptecScraper(BaseScraper):
         self.retailer = self.db_session.execute(
             select(Retailer).where(Retailer.name == "Scorptec")
         ).scalar_one()
+        self.base_url = "https://www.scorptec.com.au"
 
     def scrape_products_from_page(self, page_url: str, category: Category):
         print(f"Scraping product page: {page_url}")
@@ -59,7 +57,6 @@ class ScorptecScraper(BaseScraper):
         self.parse_and_save(product_list, category)
 
     def parse_and_save(self, items, category):
-        """Extracts and saves product data to the database."""
         for item in items:
             try:
                 name_element = item.select_one('.detail-product-title a')
@@ -68,7 +65,7 @@ class ScorptecScraper(BaseScraper):
                 if not name_element or not price_element: continue
 
                 product_name = name_element.get_text(strip=True)
-                product_url = "https://www.scorptec.com.au" + name_element.get('href')
+                product_url = urljoin(self.base_url, name_element.get('href'))
                 image_url = image_element.get('data-src') or image_element.get('src') if image_element else None
                 price_str = price_element.get_text(strip=True).replace("$", "").replace(",", "")
                 
@@ -79,27 +76,15 @@ class ScorptecScraper(BaseScraper):
                 except ValueError:
                     print(f"  Could not parse price '{price_str}' for {product_name}.")
 
-                existing_product = self.db_session.execute(select(Product).where(Product.url == product_url)).scalar_one_or_none()
+                product_data = {
+                    "name": product_name,
+                    "url": product_url,
+                    "price": price,
+                    "image_url": image_url,
+                    "status": status,
+                }
+                self._update_product_and_detect_deal(product_data, category)
 
-                if existing_product:
-                    if existing_product.current_price != price or existing_product.image_url != image_url:
-                        print(f"  Updating: {product_name}")
-                        existing_product.current_price = price
-                        existing_product.image_url = image_url
-                        existing_product.status = status
-                        if price is not None:
-                            self.db_session.add(PriceHistory(product_id=existing_product.id, price=price))
-                else:
-                    print(f"  Adding new product: {product_name}")
-                    new_product = Product(
-                        name=product_name, url=product_url, current_price=price, image_url=image_url,
-                        retailer_id=self.retailer.id, category_id=category.id, 
-                        on_sale=False, status=status
-                    )
-                    self.db_session.add(new_product)
-                    if price is not None:
-                        self.db_session.flush() 
-                        self.db_session.add(PriceHistory(product_id=new_product.id, price=price))
             except Exception as e:
                 print(f"  Could not parse an item. Error: {e}")
         
@@ -124,30 +109,24 @@ class ScorptecScraper(BaseScraper):
 
             subcategory_links = soup.select('.grid-subcategory-title a')
             
-            # --- NEW: Smart Category Assignment ---
             if category_name == "Cooling":
                 for link in subcategory_links:
                     href = link.get('href')
                     if not href: continue
                     
-                    # Find the specific sub-category name from the URL
                     sub_cat_slug = href.split('/')[-1]
-                    
-                    # Use our mapping to find the correct DB category name
                     db_cat_name = SUBCATEGORY_DB_MAP.get(sub_cat_slug, category_name)
                     
-                    # Get the correct category object from the database
                     final_category_obj = self.db_session.execute(
                         select(Category).where(Category.name == db_cat_name)
                     ).scalar_one()
                     
-                    url = "https://www.scorptec.com.au" + href
+                    url = urljoin(self.base_url, href)
                     print(f"\n--- Navigating to sub-category: {url} (mapped to DB cat: {db_cat_name}) ---")
                     self.scrape_products_from_page(url, final_category_obj)
                     time.sleep(1)
             else:
-                # Original logic for all other categories
-                subcategory_urls = {"https://www.scorptec.com.au" + link.get('href') for link in subcategory_links if link.get('href')}
+                subcategory_urls = {urljoin(self.base_url, link.get('href')) for link in subcategory_links if link.get('href')}
                 if not subcategory_urls:
                     print("No sub-categories found. Scraping main page directly.")
                     self.scrape_products_from_page(main_category_url, category_obj)

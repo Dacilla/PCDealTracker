@@ -15,36 +15,36 @@ if __name__ == "__main__":
     print("--- Starting All Scrapers Sequentially ---")
     
     # --- Run PC Case Gear Scraper ---
-    # try:
-    #     print("\n--- Running PC Case Gear Scraper ---")
-    #     run_pccg_scraper()
-    #     print("\n--- PC Case Gear Scraper Finished ---")
-    # except Exception as e:
-    #     print(f"\n--- PC Case Gear Scraper Failed: {e} ---")
+    try:
+        print("\n--- Running PC Case Gear Scraper ---")
+        run_pccg_scraper()
+        print("\n--- PC Case Gear Scraper Finished ---")
+    except Exception as e:
+        print(f"\n--- PC Case Gear Scraper Failed: {e} ---")
 
-    # # --- Run Scorptec Scraper ---
-    # try:
-    #     print("\n--- Running Scorptec Scraper ---")
-    #     run_scorptec_scraper()
-    #     print("\n--- Scorptec Scraper Finished ---")
-    # except Exception as e:
-    #     print(f"\n--- Scorptec Scraper Failed: {e} ---")
+    # --- Run Scorptec Scraper ---
+    try:
+        print("\n--- Running Scorptec Scraper ---")
+        run_scorptec_scraper()
+        print("\n--- Scorptec Scraper Finished ---")
+    except Exception as e:
+        print(f"\n--- Scorptec Scraper Failed: {e} ---")
 
-    # # --- Run Centre Com Scraper ---
-    # try:
-    #     print("\n--- Running Centre Com Scraper ---")
-    #     run_centrecom_scraper()
-    #     print("\n--- Centre Com Scraper Finished ---")
-    # except Exception as e:
-    #     print(f"\n--- Centre Com Scraper Failed: {e} ---")
+    # --- Run Centre Com Scraper ---
+    try:
+        print("\n--- Running Centre Com Scraper ---")
+        run_centrecom_scraper()
+        print("\n--- Centre Com Scraper Finished ---")
+    except Exception as e:
+        print(f"\n--- Centre Com Scraper Failed: {e} ---")
 
-    # # --- Run MSY Scraper ---
-    # try:
-    #     print("\n--- Running MSY Scraper ---")
-    #     run_msy_scraper()
-    #     print("\n--- MSY Scraper Finished ---")
-    # except Exception as e:
-    #     print(f"\n--- MSY Scraper Failed: {e} ---")
+    # --- Run MSY Scraper ---
+    try:
+        print("\n--- Running MSY Scraper ---")
+        run_msy_scraper()
+        print("\n--- MSY Scraper Finished ---")
+    except Exception as e:
+        print(f"\n--- MSY Scraper Failed: {e} ---")
 
     # --- Run Umart Scraper ---
     try:

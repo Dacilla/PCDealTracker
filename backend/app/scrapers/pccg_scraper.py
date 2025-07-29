@@ -2,6 +2,7 @@ import re
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 import time
+from urllib.parse import urljoin
 
 from .base_scraper import BaseScraper
 from ..database import Product, Retailer, Category, PriceHistory, ProductStatus
@@ -25,6 +26,7 @@ class PCCGScraper(BaseScraper):
         self.retailer = self.db_session.execute(
             select(Retailer).where(Retailer.name == "PC Case Gear")
         ).scalar_one()
+        self.base_url = "https://www.pccasegear.com"
 
     def scrape_products_from_page(self, page_url: str, category: Category):
         print(f"Scraping product page: {page_url}")
@@ -60,7 +62,7 @@ class PCCGScraper(BaseScraper):
                 product_url_suffix = name_element.get('href', name_element.find('a')['href'] if name_element.find('a') else None)
                 if not product_url_suffix: continue
 
-                product_url = "https://www.pccasegear.com" + product_url_suffix
+                product_url = urljoin(self.base_url, product_url_suffix)
                 image_url = image_element.get('src') if image_element else None
                 price_str = price_element.get_text(strip=True).replace("$", "").replace(",", "")
                 
@@ -70,28 +72,16 @@ class PCCGScraper(BaseScraper):
                     status = ProductStatus.AVAILABLE
                 except ValueError:
                     print(f"  Could not parse price '{price_str}' for {product_name}.")
+                
+                product_data = {
+                    "name": product_name,
+                    "url": product_url,
+                    "price": price,
+                    "image_url": image_url,
+                    "status": status,
+                }
+                self._update_product_and_detect_deal(product_data, category)
 
-                existing_product = self.db_session.execute(select(Product).where(Product.url == product_url)).scalar_one_or_none()
-
-                if existing_product:
-                    if existing_product.current_price != price or existing_product.image_url != image_url:
-                        print(f"  Updating: {product_name}")
-                        existing_product.current_price = price
-                        existing_product.image_url = image_url
-                        existing_product.status = status
-                        if price is not None:
-                            self.db_session.add(PriceHistory(product_id=existing_product.id, price=price))
-                else:
-                    print(f"  Adding new product: {product_name}")
-                    new_product = Product(
-                        name=product_name, url=product_url, current_price=price, image_url=image_url,
-                        retailer_id=self.retailer.id, category_id=category.id, 
-                        on_sale=False, status=status
-                    )
-                    self.db_session.add(new_product)
-                    if price is not None:
-                        self.db_session.flush() 
-                        self.db_session.add(PriceHistory(product_id=new_product.id, price=price))
             except Exception as e:
                 print(f"  Could not parse an item. Error: {e}")
 
@@ -103,14 +93,13 @@ class PCCGScraper(BaseScraper):
                 print(f"Category '{category_name}' not found. Skipping.")
                 continue
 
-            # This call now correctly includes the wait_for_selector argument
             soup = self.get_page_content(main_category_url, wait_for_selector=".prdct_box_sec")
             if not soup:
                 print(f"Failed to retrieve main page for {category_name}. Skipping.")
                 continue
 
             subcategory_cards = soup.select('.prdct_box a')
-            subcategory_urls = {card.get('href') for card in subcategory_cards if card.get('href') and '/category/' in card.get('href')}
+            subcategory_urls = {urljoin(self.base_url, card.get('href')) for card in subcategory_cards if card.get('href') and '/category/' in card.get('href')}
 
             if not subcategory_urls:
                 print("No sub-categories found. Scraping main page directly.")
@@ -138,6 +127,3 @@ def run_pccg_scraper():
             scraper.close()
         db_session.close()
         print("DB session closed.")
-
-if __name__ == '__main__':
-    run_pccg_scraper()

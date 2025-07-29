@@ -6,7 +6,6 @@ from urllib.parse import urljoin
 from .base_scraper import BaseScraper
 from ..database import Product, Retailer, Category, PriceHistory, ProductStatus
 
-# --- Umart-specific category mapping ---
 SCRAPE_TASKS = [
     {"db_category": "Graphics Cards", "url": "https://www.umart.com.au/pc-parts/computer-parts/graphics-cards-gpu-610"},
     {"db_category": "CPUs", "url": "https://www.umart.com.au/pc-parts/computer-parts/cpu-processors-611"},
@@ -23,9 +22,6 @@ SCRAPE_TASKS = [
 ]
 
 class UmartScraper(BaseScraper):
-    """
-    A scraper for the retailer Umart.
-    """
     def __init__(self, db_session: Session):
         super().__init__(db_session)
         self.retailer = self.db_session.execute(
@@ -34,10 +30,6 @@ class UmartScraper(BaseScraper):
         self.base_url = "https://www.umart.com.au"
 
     def run(self):
-        """
-        Main scraping process. Iterates through categories and their pages.
-        It first attempts to set the page size to the maximum (120) to reduce page loads.
-        """
         for task in SCRAPE_TASKS:
             category_name = task["db_category"]
             category_url = task["url"]
@@ -52,8 +44,7 @@ class UmartScraper(BaseScraper):
                 continue
             
             current_url = category_url
-
-            # --- Logic to set max page size on the first page ---
+            
             soup = self.get_page_content(current_url, wait_for_selector=".category_section")
             if not soup:
                 print(f"Failed to get initial content for {current_url}. Skipping category.")
@@ -70,7 +61,6 @@ class UmartScraper(BaseScraper):
                     continue
             else:
                 print("Already on max page size or link not found. Proceeding with default.")
-            # --- End of new logic ---
             
             while current_url:
                 if soup is None:
@@ -89,10 +79,9 @@ class UmartScraper(BaseScraper):
                 print(f"Found {len(product_list)} products on this page.")
                 self.parse_and_save(product_list, category_obj)
                 
-                # --- Pagination Logic ---
                 next_page_element = soup.select_one(".page a:-soup-contains('>')")
                 
-                soup = None # Reset soup for the next loop iteration
+                soup = None
 
                 if next_page_element and next_page_element.get('href'):
                     next_page_url = urljoin(self.base_url, next_page_element['href'])
@@ -107,7 +96,6 @@ class UmartScraper(BaseScraper):
             time.sleep(3)
 
     def parse_and_save(self, items, category):
-        """Extracts and saves product data to the database."""
         for item in items:
             try:
                 name_element = item.select_one('.goods_name a')
@@ -118,7 +106,7 @@ class UmartScraper(BaseScraper):
                     continue
 
                 product_name = name_element.get('title', '').strip()
-                product_url = name_element.get('href')
+                product_url = urljoin(self.base_url, name_element.get('href'))
                 
                 image_url = image_element.get('content') if image_element else None
                 
@@ -132,42 +120,14 @@ class UmartScraper(BaseScraper):
                 except (ValueError, AttributeError):
                     print(f"  Could not parse price '{price_text}' for {product_name}.")
 
-                existing_product = self.db_session.execute(
-                    select(Product).where(Product.url == product_url)
-                ).scalar_one_or_none()
-
-                if existing_product:
-                    needs_update = False
-                    if existing_product.current_price != price:
-                        existing_product.current_price = price
-                        needs_update = True
-                    if existing_product.image_url != image_url:
-                        existing_product.image_url = image_url
-                        needs_update = True
-                    if existing_product.status != status:
-                        existing_product.status = status
-                        needs_update = True
-                    
-                    if needs_update:
-                        print(f"  Updating: {product_name}")
-                        if price is not None:
-                            self.db_session.add(PriceHistory(product_id=existing_product.id, price=price))
-                else:
-                    print(f"  Adding new product: {product_name}")
-                    new_product = Product(
-                        name=product_name, 
-                        url=product_url, 
-                        current_price=price, 
-                        image_url=image_url,
-                        retailer_id=self.retailer.id, 
-                        category_id=category.id, 
-                        on_sale=False, 
-                        status=status
-                    )
-                    self.db_session.add(new_product)
-                    if price is not None:
-                        self.db_session.flush() 
-                        self.db_session.add(PriceHistory(product_id=new_product.id, price=price))
+                product_data = {
+                    "name": product_name,
+                    "url": product_url,
+                    "price": price,
+                    "image_url": image_url,
+                    "status": status,
+                }
+                self._update_product_and_detect_deal(product_data, category)
                         
             except Exception as e:
                 print(f"  Could not parse an item. Error: {e}")
@@ -181,7 +141,6 @@ class UmartScraper(BaseScraper):
             self.db_session.rollback()
 
 def run_umart_scraper():
-    """A standalone function to initialize the database session and run the scraper."""
     from ..dependencies import SessionLocal
     print("Initializing DB session for Umart scraper...")
     db_session = SessionLocal()
