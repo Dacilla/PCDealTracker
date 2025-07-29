@@ -8,11 +8,12 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from backend.app.scrapers.pccg_scraper import run_pccg_scraper
 from backend.app.scrapers.scorptec_scraper import run_scorptec_scraper
 from backend.app.scrapers.centrecom_scraper import run_centrecom_scraper
+from backend.app.scrapers.msy_scraper import run_msy_scraper
 
 if __name__ == "__main__":
     print("--- Starting All Scrapers Sequentially ---")
     
-    # --- Run PC Case Gear Scraper (Commented out for testing) ---
+    # --- Run PC Case Gear Scraper ---
     # try:
     #     print("\n--- Running PC Case Gear Scraper ---")
     #     run_pccg_scraper()
@@ -20,7 +21,7 @@ if __name__ == "__main__":
     # except Exception as e:
     #     print(f"\n--- PC Case Gear Scraper Failed: {e} ---")
 
-    # # --- Run Scorptec Scraper (Commented out for testing) ---
+    # # --- Run Scorptec Scraper ---
     # try:
     #     print("\n--- Running Scorptec Scraper ---")
     #     run_scorptec_scraper()
@@ -28,12 +29,20 @@ if __name__ == "__main__":
     # except Exception as e:
     #     print(f"\n--- Scorptec Scraper Failed: {e} ---")
 
-    # --- Run Centre Com Scraper ---
+    # # --- Run Centre Com Scraper ---
+    # try:
+    #     print("\n--- Running Centre Com Scraper ---")
+    #     run_centrecom_scraper()
+    #     print("\n--- Centre Com Scraper Finished ---")
+    # except Exception as e:
+    #     print(f"\n--- Centre Com Scraper Failed: {e} ---")
+
+    # --- Run MSY Scraper ---
     try:
-        print("\n--- Running Centre Com Scraper ---")
-        run_centrecom_scraper()
-        print("\n--- Centre Com Scraper Finished ---")
+        print("\n--- Running MSY Scraper ---")
+        run_msy_scraper()
+        print("\n--- MSY Scraper Finished ---")
     except Exception as e:
-        print(f"\n--- Centre Com Scraper Failed: {e} ---")
+        print(f"\n--- MSY Scraper Failed: {e} ---")
     
     print("\n--- All Scrapers Finished ---")
