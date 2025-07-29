@@ -7,8 +7,12 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select, func
 import time
 import datetime
+import threading
 
 from ..database import Product, PriceHistory, ProductStatus, Category
+
+# A lock to prevent race conditions during driver initialization
+_driver_lock = threading.Lock()
 
 class BaseScraper:
     """
@@ -16,18 +20,21 @@ class BaseScraper:
     explicit waiting strategy and enhanced, non-destructive debugging.
     Includes centralized logic for updating products and detecting deals.
     """
-    def __init__(self, db_session: Session):
+    def __init__(self, db_session: Session, shutdown_event: threading.Event):
         self.db_session = db_session
         self.driver = None
+        self.shutdown_event = shutdown_event
         
         try:
-            print("Initializing undetected-chromedriver...")
-            options = uc.ChromeOptions()
-            options.add_argument('--no-sandbox')
-            options.add_argument('--disable-dev-shm-usage')
-            
-            self.driver = uc.Chrome(options=options, use_subprocess=True)
-            print("Driver initialized.")
+            # Use a lock to ensure only one thread initializes a driver at a time
+            with _driver_lock:
+                print("Initializing undetected-chromedriver...")
+                options = uc.ChromeOptions()
+                options.add_argument('--no-sandbox')
+                options.add_argument('--disable-dev-shm-usage')
+                
+                self.driver = uc.Chrome(options=options, use_subprocess=True)
+                print("Driver initialized.")
 
         except Exception as e:
             print(f"Error setting up undetected-chromedriver: {e}")
@@ -36,7 +43,12 @@ class BaseScraper:
     def get_page_content(self, url: str, wait_for_selector: str) -> BeautifulSoup | None:
         """
         Fetches page content, explicitly waiting for a key element to be present.
+        Checks for a shutdown signal before proceeding.
         """
+        if self.shutdown_event.is_set():
+            print("Shutdown signal received, stopping navigation.")
+            return None
+
         if not self.driver:
             return None
             
@@ -58,7 +70,7 @@ class BaseScraper:
             print(f"Error fetching or waiting for content at {url or self.driver.current_url}.")
             print(f"Underlying error: {e}")
             
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.datetime.now().strftime("%Ym%d_%H%M%S")
             screenshot_filename = f"debug_screenshot_{timestamp}.png"
             html_filename = f"debug_page_content_{timestamp}.html"
             

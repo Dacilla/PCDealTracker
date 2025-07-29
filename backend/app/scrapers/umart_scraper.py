@@ -2,6 +2,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select
 import time
 from urllib.parse import urljoin
+import threading
 
 from .base_scraper import BaseScraper
 from ..database import Product, Retailer, Category, PriceHistory, ProductStatus
@@ -22,8 +23,8 @@ SCRAPE_TASKS = [
 ]
 
 class UmartScraper(BaseScraper):
-    def __init__(self, db_session: Session):
-        super().__init__(db_session)
+    def __init__(self, db_session: Session, shutdown_event: threading.Event):
+        super().__init__(db_session, shutdown_event)
         self.retailer = self.db_session.execute(
             select(Retailer).where(Retailer.name == "Umart")
         ).scalar_one()
@@ -31,6 +32,9 @@ class UmartScraper(BaseScraper):
 
     def run(self):
         for task in SCRAPE_TASKS:
+            if self.shutdown_event.is_set():
+                print("Shutdown signal received, stopping Umart scraper.")
+                break
             category_name = task["db_category"]
             category_url = task["url"]
             print(f"\n{'='*20}\nStarting Umart scrape for DB category: '{category_name}' ({category_url})\n{'='*20}")
@@ -63,6 +67,7 @@ class UmartScraper(BaseScraper):
                 print("Already on max page size or link not found. Proceeding with default.")
             
             while current_url:
+                if self.shutdown_event.is_set(): break
                 if soup is None:
                     print(f"Scraping page: {current_url}")
                     soup = self.get_page_content(current_url, wait_for_selector=".goods_list")
@@ -97,6 +102,7 @@ class UmartScraper(BaseScraper):
 
     def parse_and_save(self, items, category):
         for item in items:
+            if self.shutdown_event.is_set(): break
             try:
                 name_element = item.select_one('.goods_name a')
                 price_element = item.select_one('.goods-price')
@@ -140,13 +146,13 @@ class UmartScraper(BaseScraper):
             print(f"Error committing changes: {e}")
             self.db_session.rollback()
 
-def run_umart_scraper():
+def run_umart_scraper(shutdown_event: threading.Event):
     from ..dependencies import SessionLocal
     print("Initializing DB session for Umart scraper...")
     db_session = SessionLocal()
     scraper = None
     try:
-        scraper = UmartScraper(db_session)
+        scraper = UmartScraper(db_session, shutdown_event)
         scraper.run()
     except Exception as e:
         print(f"\nAn error occurred during the Umart scraping process: {e}")

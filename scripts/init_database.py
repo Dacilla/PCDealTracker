@@ -15,6 +15,7 @@ RETAILERS = [
     {"name": "MSY Technology", "url": "https://www.msy.com.au"},
     {"name": "Umart", "url": "https://www.umart.com.au"},
     {"name": "Computer Alliance", "url": "https://www.computeralliance.com.au"},
+    {"name": "JW Computers", "url": "https://www.jw.com.au"},
 ]
 
 CATEGORIES = [
@@ -27,7 +28,7 @@ CATEGORIES = [
     {"name": "PC Cases"},
     {"name": "Monitors"},
     {"name": "Cooling"},
-    # "Fans & Accessories" removed
+    {"name": "Fans & Accessories"},
 ]
 
 def setup_database():

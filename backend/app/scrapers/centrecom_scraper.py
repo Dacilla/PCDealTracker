@@ -3,6 +3,7 @@ from sqlalchemy import select
 import time
 import re
 from urllib.parse import urljoin
+import threading
 
 from selenium.common.exceptions import NoSuchElementException, TimeoutException
 from selenium.webdriver.common.by import By
@@ -28,8 +29,8 @@ SCRAPE_TASKS = [
 ]
 
 class CentreComScraper(BaseScraper):
-    def __init__(self, db_session: Session):
-        super().__init__(db_session)
+    def __init__(self, db_session: Session, shutdown_event: threading.Event):
+        super().__init__(db_session, shutdown_event)
         self.retailer = self.db_session.execute(
             select(Retailer).where(Retailer.name == "Centre Com")
         ).scalar_one()
@@ -37,6 +38,9 @@ class CentreComScraper(BaseScraper):
 
     def run(self):
         for task in SCRAPE_TASKS:
+            if self.shutdown_event.is_set():
+                print("Shutdown signal received, stopping Centre Com scraper.")
+                break
             category_name = task["db_category"]
             category_url = task["url"]
             print(f"\n{'='*20}\nStarting Centre Com scrape for DB category: '{category_name}' ({category_url})\n{'='*20}")
@@ -51,6 +55,7 @@ class CentreComScraper(BaseScraper):
             
             current_url = category_url
             while current_url:
+                if self.shutdown_event.is_set(): break
                 print(f"Scraping page: {current_url}")
                 
                 soup = self.get_page_content(current_url, wait_for_selector=".product-grid")
@@ -82,6 +87,7 @@ class CentreComScraper(BaseScraper):
 
     def parse_and_save(self, items, category):
         for item in items:
+            if self.shutdown_event.is_set(): break
             try:
                 name_element = item.select_one('.prbox_name')
                 price_element = item.select_one('.saleprice')
@@ -135,13 +141,13 @@ class CentreComScraper(BaseScraper):
             print(f"Error committing changes: {e}")
             self.db_session.rollback()
 
-def run_centrecom_scraper():
+def run_centrecom_scraper(shutdown_event: threading.Event):
     from ..dependencies import SessionLocal
     print("Initializing DB session for Centre Com scraper...")
     db_session = SessionLocal()
     scraper = None
     try:
-        scraper = CentreComScraper(db_session)
+        scraper = CentreComScraper(db_session, shutdown_event)
         scraper.run()
     except Exception as e:
         print(f"\nAn error occurred during the Centre Com scraping process: {e}")

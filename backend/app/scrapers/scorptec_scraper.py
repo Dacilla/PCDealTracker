@@ -2,6 +2,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select
 import time
 from urllib.parse import urljoin
+import threading
 from selenium.common.exceptions import NoSuchElementException, TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -33,14 +34,15 @@ SUBCATEGORY_DB_MAP = {
 }
 
 class ScorptecScraper(BaseScraper):
-    def __init__(self, db_session: Session):
-        super().__init__(db_session)
+    def __init__(self, db_session: Session, shutdown_event: threading.Event):
+        super().__init__(db_session, shutdown_event)
         self.retailer = self.db_session.execute(
             select(Retailer).where(Retailer.name == "Scorptec")
         ).scalar_one()
         self.base_url = "https://www.scorptec.com.au"
 
     def scrape_products_from_page(self, page_url: str, category: Category):
+        if self.shutdown_event.is_set(): return
         print(f"Scraping product page: {page_url}")
         
         soup = self.get_page_content(page_url, wait_for_selector="#product-list-detail-wrapper")
@@ -58,6 +60,7 @@ class ScorptecScraper(BaseScraper):
 
     def parse_and_save(self, items, category):
         for item in items:
+            if self.shutdown_event.is_set(): break
             try:
                 name_element = item.select_one('.detail-product-title a')
                 price_element = item.select_one('.detail-product-price')
@@ -93,6 +96,9 @@ class ScorptecScraper(BaseScraper):
 
     def run(self):
         for category_name, main_category_url in CATEGORY_URL_MAP.items():
+            if self.shutdown_event.is_set():
+                print("Shutdown signal received, stopping Scorptec scraper.")
+                break
             print(f"\n{'='*20}\nStarting Scorptec scrape for category: {category_name}\n{'='*20}")
             
             category_obj = self.db_session.execute(
@@ -111,6 +117,7 @@ class ScorptecScraper(BaseScraper):
             
             if category_name == "Cooling":
                 for link in subcategory_links:
+                    if self.shutdown_event.is_set(): break
                     href = link.get('href')
                     if not href: continue
                     
@@ -134,17 +141,18 @@ class ScorptecScraper(BaseScraper):
                 
                 print(f"Found {len(subcategory_urls)} sub-categories to scrape.")
                 for url in sorted(list(subcategory_urls)):
+                    if self.shutdown_event.is_set(): break
                     print(f"\n--- Navigating to sub-category: {url} ---")
                     self.scrape_products_from_page(url, category_obj)
                     time.sleep(1)
 
-def run_scorptec_scraper():
+def run_scorptec_scraper(shutdown_event: threading.Event):
     from ..dependencies import SessionLocal
     print("Initializing DB session for Scorptec scraper...")
     db_session = SessionLocal()
     scraper = None
     try:
-        scraper = ScorptecScraper(db_session)
+        scraper = ScorptecScraper(db_session, shutdown_event)
         scraper.run()
     except Exception as e:
         print(f"\nAn error occurred during the Scorptec scraping process: {e}")

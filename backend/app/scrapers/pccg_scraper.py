@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select
 import time
 from urllib.parse import urljoin
+import threading
 
 from .base_scraper import BaseScraper
 from ..database import Product, Retailer, Category, PriceHistory, ProductStatus
@@ -21,14 +22,15 @@ CATEGORY_URL_MAP = {
 }
 
 class PCCGScraper(BaseScraper):
-    def __init__(self, db_session: Session):
-        super().__init__(db_session)
+    def __init__(self, db_session: Session, shutdown_event: threading.Event):
+        super().__init__(db_session, shutdown_event)
         self.retailer = self.db_session.execute(
             select(Retailer).where(Retailer.name == "PC Case Gear")
         ).scalar_one()
         self.base_url = "https://www.pccasegear.com"
 
     def scrape_products_from_page(self, page_url: str, category: Category):
+        if self.shutdown_event.is_set(): return
         print(f"Scraping product page: {page_url}")
         soup = self.get_page_content(page_url, wait_for_selector="footer")
         if not soup:
@@ -52,6 +54,7 @@ class PCCGScraper(BaseScraper):
 
     def parse_and_save(self, items, name_selector, price_selector, image_selector, category):
         for item in items:
+            if self.shutdown_event.is_set(): break
             try:
                 name_element = item.select_one(name_selector)
                 price_element = item.select_one(price_selector)
@@ -87,6 +90,9 @@ class PCCGScraper(BaseScraper):
 
     def run(self):
         for category_name, main_category_url in CATEGORY_URL_MAP.items():
+            if self.shutdown_event.is_set():
+                print("Shutdown signal received, stopping PCCG scraper.")
+                break
             print(f"\n{'='*20}\nStarting scrape for category: {category_name}\n{'='*20}")
             category_obj = self.db_session.execute(select(Category).where(Category.name == category_name)).scalar_one_or_none()
             if not category_obj:
@@ -108,17 +114,18 @@ class PCCGScraper(BaseScraper):
             
             print(f"Found {len(subcategory_urls)} sub-categories.")
             for url in sorted(list(subcategory_urls)):
+                if self.shutdown_event.is_set(): break
                 print(f"\n--- Navigating to sub-category: {url} ---")
                 self.scrape_products_from_page(url, category_obj)
                 time.sleep(1)
 
-def run_pccg_scraper():
+def run_pccg_scraper(shutdown_event: threading.Event):
     from ..dependencies import SessionLocal
     print("Initializing DB session for scraper...")
     db_session = SessionLocal()
     scraper = None
     try:
-        scraper = PCCGScraper(db_session)
+        scraper = PCCGScraper(db_session, shutdown_event)
         scraper.run()
     except Exception as e:
         print(f"\nAn error occurred: {e}")
