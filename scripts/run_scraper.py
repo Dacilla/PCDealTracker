@@ -17,15 +17,17 @@ from backend.app.scrapers.centrecom_scraper import run_centrecom_scraper
 from backend.app.scrapers.msy_scraper import run_msy_scraper
 from backend.app.scrapers.umart_scraper import run_umart_scraper
 from backend.app.scrapers.computeralliance_scraper import run_computeralliance_scraper
+from backend.app.scrapers.jw_scraper import run_jw_scraper
 
 # A list of all scraper functions to be executed
 ALL_SCRAPERS = [
-    run_pccg_scraper,
-    run_scorptec_scraper,
-    run_centrecom_scraper,
-    run_msy_scraper,
-    run_umart_scraper,
-    run_computeralliance_scraper,
+    # run_pccg_scraper,
+    # run_scorptec_scraper,
+    # run_centrecom_scraper,
+    # run_msy_scraper,
+    # run_umart_scraper,
+    # run_computeralliance_scraper,
+    run_jw_scraper,
 ]
 
 def main():
