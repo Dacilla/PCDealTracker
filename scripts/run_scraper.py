@@ -21,12 +21,12 @@ from backend.app.scrapers.jw_scraper import run_jw_scraper
 
 # A list of all scraper functions to be executed
 ALL_SCRAPERS = [
-    # run_pccg_scraper,
-    # run_scorptec_scraper,
-    # run_centrecom_scraper,
-    # run_msy_scraper,
-    # run_umart_scraper,
-    # run_computeralliance_scraper,
+    run_pccg_scraper,
+    run_scorptec_scraper,
+    run_centrecom_scraper,
+    run_msy_scraper,
+    run_umart_scraper,
+    run_computeralliance_scraper,
     run_jw_scraper,
 ]
 

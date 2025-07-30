@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PC Deal Tracker</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         body {
@@ -23,6 +24,20 @@
         }
         ::-webkit-scrollbar-thumb:hover {
             background: #555;
+        }
+        .modal-enter {
+            opacity: 0;
+            transform: scale(0.95);
+        }
+        .modal-enter-active {
+            opacity: 1;
+            transform: scale(1);
+            transition: all 300ms ease-out;
+        }
+        .modal-leave-active {
+            opacity: 0;
+            transform: scale(0.95);
+            transition: all 300ms ease-in;
         }
     </style>
 </head>
@@ -73,6 +88,24 @@
         </main>
     </div>
 
+    <!-- Price History Modal -->
+    <div id="price-history-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 hidden modal-enter">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-full flex flex-col">
+            <div class="flex justify-between items-center p-4 border-b">
+                <h2 class="text-lg font-semibold text-gray-800" id="modal-product-name">Product Price History</h2>
+                <button id="modal-close-button" class="text-gray-500 hover:text-gray-800 text-3xl leading-none">&times;</button>
+            </div>
+            <div class="p-6 flex-1 overflow-y-auto">
+                <div class="relative h-96">
+                    <canvas id="price-chart"></canvas>
+                </div>
+            </div>
+            <div class="p-4 bg-gray-50 border-t flex justify-end">
+                <a id="modal-product-link" href="#" target="_blank" rel="noopener noreferrer" class="bg-blue-500 text-white px-4 py-2 rounded-md hover:bg-blue-600">View on Retailer Site</a>
+            </div>
+        </div>
+    </div>
+
     <script>
         // --- API Base URL ---
         const API_BASE_URL = 'http://127.0.0.1:8000/api/v1';
@@ -84,22 +117,30 @@
         const loadingSpinner = document.getElementById('loading-spinner');
         const errorMessage = document.getElementById('error-message');
         const viewTabs = document.getElementById('view-tabs');
+        const priceHistoryModal = document.getElementById('price-history-modal');
+        const modalCloseButton = document.getElementById('modal-close-button');
+        const modalProductName = document.getElementById('modal-product-name');
+        const modalProductLink = document.getElementById('modal-product-link');
+        const priceChartCanvas = document.getElementById('price-chart');
 
         // --- State Management ---
         let currentState = {
             view: 'products', // 'products' or 'deals'
             categoryId: null, // null for all categories
         };
+        let priceChart = null; // To hold the chart instance
 
         /**
          * Fetches data from a given API endpoint.
          * @param {string} endpoint - The API endpoint to fetch from.
          * @returns {Promise<any>} - The JSON response from the API.
          */
-        async function fetchData(endpoint) {
-            loadingSpinner.classList.remove('hidden');
-            errorMessage.classList.add('hidden');
-            productGrid.innerHTML = '';
+        async function fetchData(endpoint, showLoading = true) {
+            if (showLoading) {
+                loadingSpinner.classList.remove('hidden');
+                errorMessage.classList.add('hidden');
+                productGrid.innerHTML = '';
+            }
             try {
                 const response = await fetch(`${API_BASE_URL}/${endpoint}`);
                 if (!response.ok) {
@@ -108,10 +149,10 @@
                 return await response.json();
             } catch (error) {
                 console.error("Fetch error:", error);
-                errorMessage.classList.remove('hidden');
+                if (showLoading) errorMessage.classList.remove('hidden');
                 return null;
             } finally {
-                loadingSpinner.classList.add('hidden');
+                if (showLoading) loadingSpinner.classList.add('hidden');
             }
         }
 
@@ -130,27 +171,129 @@
             productCount.textContent = `${products.length} Products`;
             products.forEach(product => {
                 const card = document.createElement('div');
-                card.className = 'bg-white rounded-lg shadow-md overflow-hidden transform hover:-translate-y-1 transition-transform duration-300';
+                card.className = 'product-card bg-white rounded-lg shadow-md overflow-hidden transform hover:-translate-y-1 transition-transform duration-300 cursor-pointer';
+                card.dataset.productId = product.id;
                 
                 const onSaleBadge = product.on_sale ? `<span class="absolute top-2 right-2 bg-red-500 text-white text-xs font-bold px-2 py-1 rounded-full">DEAL</span>` : '';
 
                 card.innerHTML = `
-                    <a href="${product.url}" target="_blank" rel="noopener noreferrer" class="block">
-                        <div class="relative">
-                            <img src="${product.image_url}" alt="${product.name}" class="w-full h-48 object-contain p-4 bg-white" onerror="this.src='https://placehold.co/400x400/F0F0F0/AAAAAA?text=No+Image'">
-                            ${onSaleBadge}
+                    <div class="relative">
+                        <img src="${product.image_url}" alt="${product.name}" class="w-full h-48 object-contain p-4 bg-white" onerror="this.src='https://placehold.co/400x400/F0F0F0/AAAAAA?text=No+Image'">
+                        ${onSaleBadge}
+                    </div>
+                    <div class="p-4">
+                        <h3 class="text-sm font-semibold text-gray-800 h-20 overflow-hidden">${product.name}</h3>
+                        <p class="text-xs text-gray-500 mt-1">${product.retailer.name}</p>
+                        <div class="mt-4 flex items-center justify-between">
+                            <span class="text-lg font-bold text-gray-900">$${product.current_price ? product.current_price.toFixed(2) : 'N/A'}</span>
                         </div>
-                        <div class="p-4">
-                            <h3 class="text-sm font-semibold text-gray-800 h-20 overflow-hidden">${product.name}</h3>
-                            <p class="text-xs text-gray-500 mt-1">${product.retailer.name}</p>
-                            <div class="mt-4 flex items-center justify-between">
-                                <span class="text-lg font-bold text-gray-900">$${product.current_price ? product.current_price.toFixed(2) : 'N/A'}</span>
-                            </div>
-                        </div>
-                    </a>
+                    </div>
                 `;
                 productGrid.appendChild(card);
             });
+        }
+
+        /**
+         * Renders the price history chart.
+         * @param {Array} historyData - Array of price history objects.
+         */
+        function renderChart(historyData) {
+            if (priceChart) {
+                priceChart.destroy();
+            }
+
+            const labels = historyData.map(d => {
+                if (!d || !d.timestamp) {
+                    return 'Unknown Date';
+                }
+                // Directly parse the ISO 8601 date string from the API
+                const date = new Date(d.timestamp);
+                // Check if the date is valid before trying to format it
+                if (isNaN(date)) {
+                    return 'Invalid Date';
+                }
+                return date.toLocaleDateString('en-AU', { day: 'numeric', month: 'short' });
+            });
+
+            const prices = historyData.map(d => d.price);
+
+            const ctx = priceChartCanvas.getContext('2d');
+            priceChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Price (AUD)',
+                        data: prices,
+                        borderColor: 'rgb(59, 130, 246)',
+                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                        fill: true,
+                        tension: 0.1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: false,
+                            ticks: {
+                                callback: function(value) {
+                                    return '$' + value.toFixed(2);
+                                }
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: false
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    return `Price: $${context.parsed.y.toFixed(2)}`;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        
+        /**
+         * Shows the price history modal for a given product.
+         * @param {string} productId - The ID of the product.
+         */
+        async function showPriceHistoryModal(productId) {
+            const [product, history] = await Promise.all([
+                fetchData(`products/${productId}`, false),
+                fetchData(`products/${productId}/price-history`, false)
+            ]);
+
+            if (!product || !history) {
+                alert("Could not load product details. Please try again.");
+                return;
+            }
+
+            modalProductName.textContent = product.name;
+            modalProductLink.href = product.url;
+            renderChart(history);
+
+            priceHistoryModal.classList.remove('hidden');
+            setTimeout(() => {
+                priceHistoryModal.classList.remove('modal-enter');
+                priceHistoryModal.classList.add('modal-enter-active');
+            }, 10);
+        }
+
+        function hidePriceHistoryModal() {
+            priceHistoryModal.classList.add('modal-leave-active');
+            priceHistoryModal.classList.remove('modal-enter-active');
+            setTimeout(() => {
+                priceHistoryModal.classList.add('hidden');
+                priceHistoryModal.classList.remove('modal-leave-active');
+                priceHistoryModal.classList.add('modal-enter');
+            }, 300);
         }
 
         /**
@@ -236,6 +379,21 @@
                 currentState.categoryId = categoryId === 'all' ? null : parseInt(categoryId);
                 updateActiveUI();
                 loadProducts();
+            }
+        });
+
+        productGrid.addEventListener('click', (e) => {
+            const card = e.target.closest('.product-card');
+            if (card) {
+                const productId = card.dataset.productId;
+                showPriceHistoryModal(productId);
+            }
+        });
+
+        modalCloseButton.addEventListener('click', hidePriceHistoryModal);
+        priceHistoryModal.addEventListener('click', (e) => {
+            if (e.target === priceHistoryModal) {
+                hidePriceHistoryModal();
             }
         });
 

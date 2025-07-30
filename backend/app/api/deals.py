@@ -6,7 +6,7 @@ from sqlalchemy import select, func
 
 # Import schemas and dependencies from other modules
 from ..dependencies import get_db
-from ..database import Product
+from ..database import Product, Category
 from .products import ProductSchema # Re-use the ProductSchema from the products API
 
 # --- Pydantic Schemas ---
@@ -27,7 +27,7 @@ router = APIRouter(
 def read_deals(
     db: Session = Depends(get_db),
     skip: int = 0,
-    limit: int = 100,
+    limit: int = 1000,
     category_name: Optional[str] = Query(None, description="Filter by category name")
 ):
     """
@@ -46,6 +46,22 @@ def read_deals(
     deals = db.execute(query.offset(skip).limit(limit)).scalars().all()
     return deals
 
+# --- NEW ENDPOINT ---
+@router.get("/category/{category_id}", response_model=List[ProductSchema])
+def read_deals_by_category(category_id: int, db: Session = Depends(get_db)):
+    """
+    Retrieve all deals belonging to a specific category ID.
+    """
+    query = (
+        select(Product)
+        .options(joinedload(Product.retailer), joinedload(Product.category))
+        .where(Product.on_sale == True, Product.category_id == category_id)
+        .order_by(Product.id)
+    )
+    deals = db.execute(query).scalars().all()
+    return deals
+
+
 @router.get("/stats", response_model=DealStats)
 def get_deal_stats(db: Session = Depends(get_db)):
     """
@@ -53,4 +69,3 @@ def get_deal_stats(db: Session = Depends(get_db)):
     """
     total_deals = db.query(func.count(Product.id)).filter(Product.on_sale == True).scalar()
     return {"total_deals": total_deals or 0}
-

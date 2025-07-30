@@ -42,9 +42,8 @@ router = APIRouter(
 def read_products(
     db: Session = Depends(get_db),
     skip: int = 0,
-    limit: int = 100,
+    limit: int = 1000,
     category_name: Optional[str] = Query(None, description="Filter by category name"),
-    # --- NEW: Add retailer_name filter ---
     retailer_name: Optional[str] = Query(None, description="Filter by retailer name"),
     on_sale: Optional[bool] = Query(None, description="Filter for products that are on sale")
 ):
@@ -55,7 +54,6 @@ def read_products(
     )
     if category_name:
         query = query.join(Product.category).where(Category.name == category_name)
-    # --- NEW: Apply retailer filter ---
     if retailer_name:
         query = query.join(Product.retailer).where(Retailer.name == retailer_name)
     if on_sale is not None:
@@ -74,3 +72,18 @@ def read_product(product_id: int, db: Session = Depends(get_db)):
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
     return product
+
+# --- NEW ENDPOINT ---
+@router.get("/category/{category_id}", response_model=List[ProductSchema])
+def read_products_by_category(category_id: int, db: Session = Depends(get_db)):
+    """
+    Retrieve all products belonging to a specific category ID.
+    """
+    query = (
+        select(Product)
+        .options(joinedload(Product.retailer), joinedload(Product.category))
+        .where(Product.category_id == category_id)
+        .order_by(Product.id)
+    )
+    products = db.execute(query).scalars().all()
+    return products
