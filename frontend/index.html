@@ -60,10 +60,18 @@
         <!-- Main Content -->
         <main class="flex-1 flex flex-col overflow-hidden">
             <header class="bg-white shadow-sm p-4">
-                <div class="flex items-center justify-between">
+                <div class="flex items-center justify-between space-x-4">
                     <div id="view-tabs" class="flex border-b">
                         <button data-view="products" class="tab-button py-2 px-4 border-b-2 border-blue-500 text-blue-600 font-semibold focus:outline-none">All Products</button>
                         <button data-view="deals" class="tab-button py-2 px-4 text-gray-500 hover:text-blue-600 focus:outline-none">Deals</button>
+                    </div>
+                     <div class="relative flex-1 max-w-md">
+                        <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <svg class="h-5 w-5 text-gray-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                <path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd" />
+                            </svg>
+                        </div>
+                        <input type="search" id="search-input" placeholder="Search products..." class="block w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
                     </div>
                     <div id="product-count" class="text-sm text-gray-600"></div>
                 </div>
@@ -117,6 +125,7 @@
         const loadingSpinner = document.getElementById('loading-spinner');
         const errorMessage = document.getElementById('error-message');
         const viewTabs = document.getElementById('view-tabs');
+        const searchInput = document.getElementById('search-input');
         const priceHistoryModal = document.getElementById('price-history-modal');
         const modalCloseButton = document.getElementById('modal-close-button');
         const modalProductName = document.getElementById('modal-product-name');
@@ -126,9 +135,11 @@
         // --- State Management ---
         let currentState = {
             view: 'products', // 'products' or 'deals'
-            categoryId: null, // null for all categories
+            categoryId: null,
+            searchTerm: null,
         };
-        let priceChart = null; // To hold the chart instance
+        let priceChart = null;
+        let debounceTimer;
 
         /**
          * Fetches data from a given API endpoint.
@@ -203,18 +214,11 @@
             }
 
             const labels = historyData.map(d => {
-                if (!d || !d.timestamp) {
-                    return 'Unknown Date';
-                }
-                // Directly parse the ISO 8601 date string from the API
-                const date = new Date(d.timestamp);
-                // Check if the date is valid before trying to format it
-                if (isNaN(date)) {
-                    return 'Invalid Date';
-                }
+                if (!d || !d.date) return 'Unknown Date';
+                const date = new Date(d.date);
+                if (isNaN(date)) return 'Invalid Date';
                 return date.toLocaleDateString('en-AU', { day: 'numeric', month: 'short' });
             });
-
             const prices = historyData.map(d => d.price);
 
             const ctx = priceChartCanvas.getContext('2d');
@@ -325,14 +329,22 @@
          * Main function to fetch and render products based on current state.
          */
         async function loadProducts() {
+            let baseEndpoint = currentState.view; // 'products' or 'deals'
             let endpoint = '';
-            if (currentState.view === 'deals') {
-                endpoint = currentState.categoryId ? `deals/category/${currentState.categoryId}` : 'deals';
+            const params = new URLSearchParams();
+
+            if (currentState.categoryId) {
+                endpoint = `${baseEndpoint}/category/${currentState.categoryId}`;
             } else {
-                endpoint = currentState.categoryId ? `products/category/${currentState.categoryId}` : 'products';
+                endpoint = baseEndpoint;
+            }
+
+            if (currentState.searchTerm) {
+                params.append('search', currentState.searchTerm);
             }
             
-            const products = await fetchData(endpoint);
+            const finalUrl = `${endpoint}?${params.toString()}`;
+            const products = await fetchData(finalUrl);
             renderProducts(products);
         }
 
@@ -388,6 +400,14 @@
                 const productId = card.dataset.productId;
                 showPriceHistoryModal(productId);
             }
+        });
+
+        searchInput.addEventListener('input', (e) => {
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => {
+                currentState.searchTerm = e.target.value.trim() || null;
+                loadProducts();
+            }, 300); // 300ms debounce
         });
 
         modalCloseButton.addEventListener('click', hidePriceHistoryModal);

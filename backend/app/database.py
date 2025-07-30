@@ -48,9 +48,9 @@ class Product(Base):
     model: Mapped[str] = mapped_column(String, index=True, nullable=True)
     sku: Mapped[str] = mapped_column(String, nullable=True)
     url: Mapped[str] = mapped_column(String, nullable=False, unique=True)
-    # --- NEW FIELD ---
     image_url: Mapped[str] = mapped_column(String, nullable=True)
     current_price: Mapped[float] = mapped_column(Float, nullable=True)
+    previous_price: Mapped[float] = mapped_column(Float, nullable=True) # New column
     on_sale: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[ProductStatus] = mapped_column(SQLAlchemyEnum(ProductStatus), default=ProductStatus.AVAILABLE)
     retailer_id: Mapped[int] = mapped_column(ForeignKey("retailers.id"))

@@ -4,7 +4,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
 from sqlalchemy.orm import Session
-from sqlalchemy import select, func
+from sqlalchemy import select, func, and_
 import time
 import datetime
 import threading
@@ -89,8 +89,7 @@ class BaseScraper:
     def _update_product_and_detect_deal(self, product_data: dict, category: Category):
         """
         Handles the core logic of adding or updating a product in the database,
-        including price history tracking and deal detection.
-        A product is considered "on sale" if its current price is the lowest ever recorded.
+        including price history tracking and advanced deal detection.
         """
         product_url = product_data.get("url")
         if not product_url:
@@ -106,6 +105,8 @@ class BaseScraper:
             product = existing_product
             price_changed = product.current_price != product_data.get("price")
             
+            # Update product details
+            product.previous_price = product.current_price
             product.name = product_data.get("name")
             product.current_price = product_data.get("price")
             product.image_url = product_data.get("image_url")
@@ -115,12 +116,35 @@ class BaseScraper:
                 print(f"  Price changed for {product.name}. New price: ${product.current_price}")
                 session.add(PriceHistory(product_id=product.id, price=product.current_price))
                 
-                price_history_query = select(func.min(PriceHistory.price)).where(PriceHistory.product_id == product.id)
-                lowest_price = session.execute(price_history_query).scalar_one_or_none()
+                # --- Advanced Deal Detection ---
+                is_deal = False
+                deal_reasons = []
 
+                # 1. Check for all-time low
+                lowest_price = session.execute(select(func.min(PriceHistory.price)).where(PriceHistory.product_id == product.id)).scalar_one_or_none()
                 if lowest_price is not None and product.current_price <= lowest_price:
+                    is_deal = True
+                    deal_reasons.append("all-time low price")
+
+                # 2. Check for significant price drop (e.g., > 10%)
+                if product.previous_price and product.current_price < (product.previous_price * 0.90):
+                    is_deal = True
+                    deal_reasons.append("significant price drop")
+                
+                # 3. Check if price is below 30-day average
+                thirty_days_ago = datetime.datetime.utcnow() - datetime.timedelta(days=30)
+                avg_price_query = select(func.avg(PriceHistory.price)).where(
+                    and_(PriceHistory.product_id == product.id, PriceHistory.date >= thirty_days_ago)
+                )
+                avg_price = session.execute(avg_price_query).scalar_one_or_none()
+                
+                if avg_price and product.current_price < avg_price:
+                    is_deal = True
+                    deal_reasons.append("below 30-day average")
+
+                if is_deal:
                     if not product.on_sale:
-                        print(f"  *** New record low price! Marking as a deal: {product.name} ***")
+                        print(f"  *** New Deal Found! Reasons: {', '.join(deal_reasons)} for {product.name} ***")
                     product.on_sale = True
                 else:
                     product.on_sale = False
@@ -131,11 +155,12 @@ class BaseScraper:
                 name=product_data.get("name"),
                 url=product_data.get("url"),
                 current_price=product_data.get("price"),
+                previous_price=product_data.get("price"),
                 image_url=product_data.get("image_url"),
                 retailer_id=self.retailer.id,
                 category_id=category.id,
                 status=product_data.get("status"),
-                on_sale=True  # It's a deal by default as it's the first price
+                on_sale=True
             )
             session.add(new_product)
             session.flush()
