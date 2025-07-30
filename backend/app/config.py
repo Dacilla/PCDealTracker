@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     
     # Scraping settings
     scrape_interval_hours: int = 6
-    max_concurrent_scrapers: int = 6
+    max_concurrent_scrapers: int = 10
     request_delay_seconds: int = 2
     
     # API settings

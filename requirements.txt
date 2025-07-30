@@ -8,3 +8,4 @@ httpx
 beautifulsoup4
 webdriver-manager
 undetected-chromedriver
+APScheduler

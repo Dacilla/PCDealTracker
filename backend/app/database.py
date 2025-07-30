@@ -28,6 +28,7 @@ class Retailer(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     url: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    logo_url: Mapped[str] = mapped_column(String(255), nullable=True) # New column
     products: Mapped[List["Product"]] = relationship(back_populates="retailer")
     def __repr__(self) -> str:
         return f"Retailer(id={self.id!r}, name={self.name!r})"
@@ -50,7 +51,7 @@ class Product(Base):
     url: Mapped[str] = mapped_column(String, nullable=False, unique=True)
     image_url: Mapped[str] = mapped_column(String, nullable=True)
     current_price: Mapped[float] = mapped_column(Float, nullable=True)
-    previous_price: Mapped[float] = mapped_column(Float, nullable=True) # New column
+    previous_price: Mapped[float] = mapped_column(Float, nullable=True)
     on_sale: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[ProductStatus] = mapped_column(SQLAlchemyEnum(ProductStatus), default=ProductStatus.AVAILABLE)
     retailer_id: Mapped[int] = mapped_column(ForeignKey("retailers.id"))

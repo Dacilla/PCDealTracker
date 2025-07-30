@@ -9,13 +9,13 @@ from backend.app.database import Base, Retailer, Category
 from backend.app.config import settings
 
 RETAILERS = [
-    {"name": "PC Case Gear", "url": "https://www.pccasegear.com"},
-    {"name": "Scorptec", "url": "https://www.scorptec.com.au"},
-    {"name": "Centre Com", "url": "https://www.centrecom.com.au"},
-    {"name": "MSY Technology", "url": "https://www.msy.com.au"},
-    {"name": "Umart", "url": "https://www.umart.com.au"},
-    {"name": "Computer Alliance", "url": "https://www.computeralliance.com.au"},
-    {"name": "JW Computers", "url": "https://www.jw.com.au"},
+    {"name": "PC Case Gear", "url": "https://www.pccasegear.com", "logo_url": "https://files.pccasegear.com/images/pccg-logo.svg"},
+    {"name": "Scorptec", "url": "https://www.scorptec.com.au", "logo_url": "https://www.scorptec.com.au/assets/images/logo_v5.png"},
+    {"name": "Centre Com", "url": "https://www.centrecom.com.au", "logo_url": "https://www.centrecom.com.au/images/logo.png"},
+    {"name": "MSY Technology", "url": "https://www.msy.com.au", "logo_url": "https://assets.msy.com.au/themes/msy/images/logo_lg.png"},
+    {"name": "Umart", "url": "https://www.umart.com.au", "logo_url": "https://www.umart.com.au/images/logo_umart.png"},
+    {"name": "Computer Alliance", "url": "https://www.computeralliance.com.au", "logo_url": "https://www.computeralliance.com.au/images/ca_logo.png"},
+    {"name": "JW Computers", "url": "https://www.jw.com.au", "logo_url": "https://www.jw.com.au/static/version1753773075/frontend/JWC/base/en_AU/images/logo.svg"},
 ]
 
 CATEGORIES = [
@@ -50,11 +50,13 @@ def setup_database():
             ).scalars().first()
             
             if not exists:
-                retailer = Retailer(name=retailer_data["name"], url=retailer_data["url"])
+                retailer = Retailer(**retailer_data)
                 session.add(retailer)
                 print(f"  Added retailer: {retailer.name}")
             else:
-                print(f"  Skipped (already exists): {retailer_data['name']}")
+                exists.url = retailer_data["url"]
+                exists.logo_url = retailer_data["logo_url"]
+                print(f"  Updated (already exists): {retailer_data['name']}")
         
         print("\nSeeding categories...")
         for category_data in CATEGORIES:
