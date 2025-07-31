@@ -40,18 +40,6 @@
             transform: scale(0.95);
             transition: all 300ms ease-in;
         }
-        .chart-legend-item {
-            display: flex;
-            align-items: center;
-            margin-right: 16px;
-            font-size: 12px;
-        }
-        .chart-legend-color-box {
-            width: 12px;
-            height: 12px;
-            margin-right: 6px;
-            border-radius: 2px;
-        }
     </style>
 </head>
 <body class="bg-gray-100">
@@ -83,8 +71,29 @@
                         </div>
                         <input type="search" id="search-input" placeholder="Search products..." class="block w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
                     </div>
+                    <!-- Custom Sort Dropdown -->
+                    <div class="relative inline-block text-left z-10">
+                        <div>
+                            <button type="button" id="sort-button" class="inline-flex justify-between w-full rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500" aria-haspopup="true" aria-expanded="true">
+                                <span id="sort-button-text">Sort by Name (A-Z)</span>
+                                <svg id="sort-chevron" class="-mr-1 ml-2 h-5 w-5 transform transition-transform" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                    <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
+                                </svg>
+                            </button>
+                        </div>
+                        <div id="sort-options" class="origin-top-right absolute right-0 mt-2 w-56 rounded-md shadow-lg bg-white ring-1 ring-black ring-opacity-5 focus:outline-none hidden transition ease-out duration-100 transform opacity-0 scale-95" role="menu" aria-orientation="vertical" aria-labelledby="sort-button">
+                            <div class="py-1" role="none">
+                                <a href="#" class="text-gray-700 block px-4 py-2 text-sm hover:bg-gray-100" role="menuitem" data-sort-by="name" data-sort-order="asc">Sort by Name (A-Z)</a>
+                                <a href="#" class="text-gray-700 block px-4 py-2 text-sm hover:bg-gray-100" role="menuitem" data-sort-by="name" data-sort-order="desc">Sort by Name (Z-A)</a>
+                                <a href="#" class="text-gray-700 block px-4 py-2 text-sm hover:bg-gray-100" role="menuitem" data-sort-by="price" data-sort-order="asc">Price: Low to High</a>
+                                <a href="#" class="text-gray-700 block px-4 py-2 text-sm hover:bg-gray-100" role="menuitem" data-sort-by="price" data-sort-order="desc">Price: High to Low</a>
+                            </div>
+                        </div>
+                    </div>
                     <div id="product-count" class="text-sm text-gray-600 font-medium"></div>
                 </div>
+                 <!-- Active Filters Container -->
+                <div id="active-filters-container" class="pt-3 flex items-center space-x-2 text-sm"></div>
             </header>
 
             <!-- Product Grid -->
@@ -117,11 +126,19 @@
                 <button id="modal-close-button" class="text-gray-500 hover:text-gray-800 text-3xl leading-none">&times;</button>
             </div>
             <div class="p-6 flex-1 overflow-y-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
-                <!-- Left side: Current Listings -->
-                <div class="lg:col-span-1">
-                    <h3 class="text-lg font-semibold text-gray-700 mb-4">Current Listings</h3>
-                    <div id="modal-listings-container" class="space-y-3">
-                        <!-- Listings will be dynamically inserted here -->
+                <!-- Left side: Price Stats & Listings -->
+                <div class="lg:col-span-1 space-y-6">
+                    <div>
+                        <h3 class="text-lg font-semibold text-gray-700 mb-2">Price Stats</h3>
+                        <div id="modal-price-stats" class="space-y-2 text-sm p-3 bg-gray-50 rounded-md">
+                            <!-- Stats will be dynamically inserted here -->
+                        </div>
+                    </div>
+                    <div>
+                        <h3 class="text-lg font-semibold text-gray-700 mb-2">Current Listings</h3>
+                        <div id="modal-listings-container" class="space-y-3">
+                            <!-- Listings will be dynamically inserted here -->
+                        </div>
                     </div>
                 </div>
                 <!-- Right side: Price History Chart -->
@@ -146,19 +163,28 @@
         const loadingSpinner = document.getElementById('loading-spinner');
         const errorMessage = document.getElementById('error-message');
         const searchInput = document.getElementById('search-input');
+        const sortButton = document.getElementById('sort-button');
+        const sortButtonText = document.getElementById('sort-button-text');
+        const sortChevron = document.getElementById('sort-chevron');
+        const sortOptions = document.getElementById('sort-options');
         const paginationControls = document.getElementById('pagination-controls');
         const productDetailsModal = document.getElementById('product-details-modal');
         const modalCloseButton = document.getElementById('modal-close-button');
         const modalProductName = document.getElementById('modal-product-name');
         const modalListingsContainer = document.getElementById('modal-listings-container');
+        const modalPriceStats = document.getElementById('modal-price-stats');
         const priceChartCanvas = document.getElementById('price-chart');
         const currentViewTitle = document.getElementById('current-view-title');
+        const activeFiltersContainer = document.getElementById('active-filters-container');
 
         // --- State Management ---
         let currentState = {
             view: 'merged-products',
             categoryId: null,
+            categoryName: 'All Products',
             searchTerm: null,
+            sortBy: 'name',
+            sortOrder: 'asc',
             page: 1,
             pageSize: 50,
             totalProducts: 0
@@ -270,44 +296,65 @@
             paginationControls.appendChild(createNavButton('&laquo;', currentState.page - 1, currentState.page === 1));
 
             const pageNumbers = [];
-            const pageRange = 2; // How many pages to show around the current page
+            const pageRange = 2;
 
-            if (totalPages <= 5) {
-                for (let i = 1; i <= totalPages; i++) {
-                    pageNumbers.push(i);
-                }
+            if (totalPages <= 7) {
+                for (let i = 1; i <= totalPages; i++) pageNumbers.push(i);
             } else {
                 pageNumbers.push(1);
-                if (currentState.page > pageRange + 1) {
-                    pageNumbers.push('...');
-                }
-
-                for (let i = Math.max(2, currentState.page - pageRange); i <= Math.min(totalPages - 1, currentState.page + pageRange); i++) {
+                if (currentState.page > pageRange + 1) pageNumbers.push('...');
+                for (let i = Math.max(2, currentState.page - pageRange + 1); i <= Math.min(totalPages - 1, currentState.page + pageRange - 1); i++) {
                     pageNumbers.push(i);
                 }
-
-                if (currentState.page < totalPages - pageRange) {
-                    pageNumbers.push('...');
-                }
+                if (currentState.page < totalPages - pageRange) pageNumbers.push('...');
                 pageNumbers.push(totalPages);
             }
 
-            // Remove duplicate '...'
             const uniquePageNumbers = [...new Set(pageNumbers)];
             uniquePageNumbers.forEach(page => {
-                 if (page === '...') {
-                    paginationControls.appendChild(createEllipsis());
-                } else {
-                    paginationControls.appendChild(createPageButton(page));
-                }
+                 if (page === '...') paginationControls.appendChild(createEllipsis());
+                 else paginationControls.appendChild(createPageButton(page));
             });
 
             paginationControls.appendChild(createNavButton('&raquo;', currentState.page + 1, currentState.page === totalPages));
         }
 
+        function renderActiveFilters() {
+            activeFiltersContainer.innerHTML = '';
+            let hasFilters = false;
+
+            const createTag = (type, text) => {
+                hasFilters = true;
+                const tag = document.createElement('span');
+                tag.className = 'inline-flex items-center px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-800';
+                tag.innerHTML = `
+                    ${text}
+                    <button data-filter-type="${type}" class="ml-1.5 -mr-1 flex-shrink-0 inline-flex items-center justify-center h-4 w-4 rounded-full text-blue-500 hover:bg-blue-200 hover:text-blue-600 focus:outline-none focus:bg-blue-500 focus:text-white">
+                        <span class="sr-only">Remove filter</span>
+                        <svg class="h-2 w-2" stroke="currentColor" fill="none" viewBox="0 0 8 8"><path stroke-linecap="round" stroke-width="1.5" d="M1 1l6 6m0-6L1 7" /></svg>
+                    </button>
+                `;
+                activeFiltersContainer.appendChild(tag);
+            };
+
+            if (currentState.categoryId) {
+                createTag('category', `Category: ${currentState.categoryName}`);
+            }
+            if (currentState.searchTerm) {
+                createTag('search', `Search: "${currentState.searchTerm}"`);
+            }
+
+            if (hasFilters) {
+                const clearButton = document.createElement('button');
+                clearButton.id = 'clear-all-filters';
+                clearButton.className = 'text-blue-600 hover:underline';
+                clearButton.textContent = 'Clear All';
+                activeFiltersContainer.appendChild(clearButton);
+            }
+        }
+
         async function renderChart(mergedProductId) {
             if (priceChart) priceChart.destroy();
-            
             const historyData = await fetchData(`merged-products/${mergedProductId}/price-history`, false);
             if (!historyData) return;
 
@@ -332,33 +379,27 @@
             priceChart = new Chart(ctx, {
                 type: 'line',
                 data: { datasets: Object.values(datasets) },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    scales: {
-                        x: { type: 'time', time: { unit: 'day' } },
-                        y: { beginAtZero: false, ticks: { callback: value => '$' + value.toFixed(2) } }
-                    },
-                    plugins: { legend: { display: true, position: 'bottom' } }
-                }
+                options: { responsive: true, maintainAspectRatio: false, scales: { x: { type: 'time', time: { unit: 'day' } }, y: { beginAtZero: false, ticks: { callback: value => '$' + value.toFixed(2) } } }, plugins: { legend: { display: true, position: 'bottom' } } }
             });
         }
         
         async function showProductDetailsModal(mergedId) {
-            const params = new URLSearchParams({ page: currentState.page, page_size: currentState.pageSize });
-            if(currentState.searchTerm) params.append('search', currentState.searchTerm);
-            if(currentState.categoryId) params.append('category_id', currentState.categoryId);
+            const params = new URLSearchParams({ page: currentState.page, page_size: currentState.pageSize, ... (currentState.searchTerm && {search: currentState.searchTerm}), ... (currentState.categoryId && {category_id: currentState.categoryId}), sort_by: currentState.sortBy, sort_order: currentState.sortOrder });
             const data = await fetchData(`${currentState.view}?${params.toString()}`, false);
             const product = data.products.find(p => p.id == mergedId);
 
-            if (!product) {
-                alert("Could not load product details.");
-                return;
-            }
+            if (!product) { alert("Could not load product details."); return; }
 
             modalProductName.textContent = product.canonical_name;
+            
+            modalPriceStats.innerHTML = `
+                <div class="flex justify-between"><span>Best Current Price:</span><span class="font-bold">${product.best_price ? '$' + product.best_price.toFixed(2) : 'N/A'} at ${product.best_price_retailer || ''}</span></div>
+                <div class="flex justify-between"><span>All-Time Low:</span><span class="font-bold">${product.all_time_low_price ? '$' + product.all_time_low_price.toFixed(2) : 'N/A'}</span></div>
+                ${product.all_time_low_date ? `<div class="flex justify-between text-xs text-gray-500"><span></span><span>on ${new Date(product.all_time_low_date).toLocaleDateString()} at ${product.all_time_low_retailer_name}</span></div>` : ''}
+            `;
+
             modalListingsContainer.innerHTML = '';
-            product.listings.forEach(listing => {
+            product.listings.sort((a, b) => (a.current_price || Infinity) - (b.current_price || Infinity)).forEach(listing => {
                 const listingEl = document.createElement('a');
                 listingEl.href = listing.url;
                 listingEl.target = '_blank';
@@ -377,9 +418,7 @@
             renderChart(mergedId);
 
             productDetailsModal.classList.remove('hidden');
-            setTimeout(() => {
-                productDetailsModal.classList.add('modal-enter-active');
-            }, 10);
+            setTimeout(() => productDetailsModal.classList.add('modal-enter-active'), 10);
         }
 
         function hideProductDetailsModal() {
@@ -395,10 +434,10 @@
         async function loadCategories() {
             const categories = await fetchData('categories', false);
             if (categories) {
-                categoryList.innerHTML = `<li><button class="w-full text-left py-2 px-4 rounded-md text-sm font-medium bg-blue-100 text-blue-700 filter-button" data-id="all">All Categories</button></li>`;
+                categoryList.innerHTML = `<li><button class="w-full text-left py-2 px-4 rounded-md text-sm font-medium bg-blue-100 text-blue-700 filter-button" data-id="all" data-name="All Products">All Categories</button></li>`;
                 categories.forEach(category => {
                     const li = document.createElement('li');
-                    li.innerHTML = `<button class="w-full text-left py-2 px-4 rounded-md text-sm font-medium text-gray-600 hover:bg-gray-200 hover:text-gray-900 filter-button" data-id="${category.id}">${category.name}</button>`;
+                    li.innerHTML = `<button class="w-full text-left py-2 px-4 rounded-md text-sm font-medium text-gray-600 hover:bg-gray-200 hover:text-gray-900 filter-button" data-id="${category.id}" data-name="${category.name}">${category.name}</button>`;
                     categoryList.appendChild(li);
                 });
             }
@@ -410,6 +449,8 @@
             params.append('page_size', currentState.pageSize);
             if (currentState.searchTerm) params.append('search', currentState.searchTerm);
             if (currentState.categoryId) params.append('category_id', currentState.categoryId);
+            if (currentState.sortBy) params.append('sort_by', currentState.sortBy);
+            if (currentState.sortOrder) params.append('sort_order', currentState.sortOrder);
             
             const finalUrl = `${currentState.view}?${params.toString()}`;
             const data = await fetchData(finalUrl);
@@ -423,18 +464,21 @@
 
         // --- Event Handlers ---
         function handleCategoryClick(e) {
-            if (e.target.matches('.filter-button')) {
-                const id = e.target.dataset.id;
+            const button = e.target.closest('.filter-button');
+            if (button) {
+                const id = button.dataset.id;
                 currentState.categoryId = id === 'all' ? null : parseInt(id);
+                currentState.categoryName = button.dataset.name;
                 currentState.page = 1;
                 
                 document.querySelectorAll('#category-list .filter-button').forEach(btn => {
                     btn.classList.toggle('bg-blue-100', btn.dataset.id === id);
                     btn.classList.toggle('text-blue-700', btn.dataset.id === id);
                 });
-                currentViewTitle.textContent = e.target.textContent;
-
+                currentViewTitle.textContent = currentState.categoryName;
+                
                 loadProducts();
+                renderActiveFilters();
             }
         }
 
@@ -444,9 +488,75 @@
                 currentState.searchTerm = e.target.value.trim() || null;
                 currentState.page = 1;
                 loadProducts();
+                renderActiveFilters();
             }, 300);
         }
+
+        function handleSortChange(e) {
+            const selectedOption = e.target.closest('[data-sort-by]');
+            if (!selectedOption) return;
+
+            e.preventDefault();
+            currentState.sortBy = selectedOption.dataset.sortBy;
+            currentState.sortOrder = selectedOption.dataset.sortOrder;
+            currentState.page = 1;
+            
+            sortButtonText.textContent = selectedOption.textContent;
+            toggleSortDropdown();
+            loadProducts();
+        }
+
+        function handleFilterRemoval(e) {
+            const button = e.target.closest('[data-filter-type]');
+            if (button) {
+                const type = button.dataset.filterType;
+                if (type === 'category') {
+                    currentState.categoryId = null;
+                    currentState.categoryName = 'All Products';
+                    currentViewTitle.textContent = currentState.categoryName;
+                    document.querySelectorAll('#category-list .filter-button').forEach(btn => {
+                        const isAllButton = btn.dataset.id === 'all';
+                        btn.classList.toggle('bg-blue-100', isAllButton);
+                        btn.classList.toggle('text-blue-700', isAllButton);
+                    });
+                } else if (type === 'search') {
+                    currentState.searchTerm = null;
+                    searchInput.value = '';
+                }
+                currentState.page = 1;
+                loadProducts();
+                renderActiveFilters();
+            } else if (e.target.id === 'clear-all-filters') {
+                currentState.categoryId = null;
+                currentState.categoryName = 'All Products';
+                currentState.searchTerm = null;
+                currentState.page = 1;
+                searchInput.value = '';
+                currentViewTitle.textContent = currentState.categoryName;
+                document.querySelectorAll('#category-list .filter-button').forEach(btn => {
+                    const isAllButton = btn.dataset.id === 'all';
+                    btn.classList.toggle('bg-blue-100', isAllButton);
+                    btn.classList.toggle('text-blue-700', isAllButton);
+                });
+                loadProducts();
+                renderActiveFilters();
+            }
+        }
         
+        function toggleSortDropdown() {
+            const isHidden = sortOptions.classList.contains('hidden');
+            if (isHidden) {
+                sortOptions.classList.remove('hidden', 'opacity-0', 'scale-95');
+                sortOptions.classList.add('opacity-100', 'scale-100');
+                sortChevron.classList.add('rotate-180');
+            } else {
+                sortOptions.classList.remove('opacity-100', 'scale-100');
+                sortOptions.classList.add('opacity-0', 'scale-95');
+                sortChevron.classList.remove('rotate-180');
+                setTimeout(() => sortOptions.classList.add('hidden'), 100);
+            }
+        }
+
         // --- Initialization ---
         document.addEventListener('DOMContentLoaded', () => {
             loadCategories();
@@ -454,6 +564,10 @@
             
             categoryList.addEventListener('click', handleCategoryClick);
             searchInput.addEventListener('input', handleSearch);
+            sortButton.addEventListener('click', toggleSortDropdown);
+            sortOptions.addEventListener('click', handleSortChange);
+            activeFiltersContainer.addEventListener('click', handleFilterRemoval);
+            
             productGrid.addEventListener('click', (e) => {
                 const card = e.target.closest('.product-card');
                 if (card) showProductDetailsModal(card.dataset.mergedId);
@@ -461,6 +575,14 @@
             modalCloseButton.addEventListener('click', hideProductDetailsModal);
             productDetailsModal.addEventListener('click', (e) => {
                 if (e.target === productDetailsModal) hideProductDetailsModal();
+            });
+            // Close dropdown if clicking outside
+            window.addEventListener('click', (e) => {
+                if (!sortButton.contains(e.target) && !sortOptions.contains(e.target)) {
+                    if (!sortOptions.classList.contains('hidden')) {
+                        toggleSortDropdown();
+                    }
+                }
             });
         });
 
