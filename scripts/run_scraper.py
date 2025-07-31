@@ -4,12 +4,16 @@ import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# Add the project root to the Python path to allow for correct imports
+# Add the project root to the Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend.app.config import settings
-# Import the database setup function
 from scripts.init_database import setup_database
+from backend.app.dependencies import SessionLocal
+from backend.app.database import ScrapeLog
+# Import the function from our new merge script
+from scripts.merge_products import group_products_by_model
+
 # Import the individual scraper runner functions
 from backend.app.scrapers.pccg_scraper import run_pccg_scraper
 from backend.app.scrapers.scorptec_scraper import run_scorptec_scraper
@@ -31,53 +35,78 @@ ALL_SCRAPERS = [
     run_computeralliance_scraper,
     run_jw_scraper,
     run_shoppingexpress_scraper,
-    # run_austin_scraper, # Temporarily disabled
+    # run_austin_scraper,
 ]
 
 def main():
     """
-    Initializes the database and then runs all scrapers concurrently using a thread pool.
-    The launch of each scraper is staggered to avoid resource spikes.
-    Handles KeyboardInterrupt for graceful shutdown.
+    Initializes the database, runs all scrapers, and then runs the
+    product merging script.
     """
-    # --- Step 1: Initialize the database before starting any scrapers ---
+    # --- Step 1: Initialize the database ---
     print("--- Initializing Database ---")
     setup_database()
     print("--- Database Initialization Complete ---")
 
     print("\n--- Starting All Scrapers Concurrently ---")
-    
+
     max_workers = settings.max_concurrent_scrapers
     shutdown_event = threading.Event()
+    db_session = SessionLocal()
     print(f"Max concurrent scrapers set to: {max_workers}")
 
     try:
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_scraper = {}
             for scraper_func in ALL_SCRAPERS:
-                # Submit the scraper to the thread pool, passing the shutdown event
+                scraper_name = scraper_func.__name__
+                # Log the start of the scraper
+                start_log = ScrapeLog(
+                    status="STARTED",
+                    details=f"Starting scraper: {scraper_name}"
+                )
+                db_session.add(start_log)
+                db_session.commit()
+
                 future = executor.submit(scraper_func, shutdown_event)
-                future_to_scraper[future] = scraper_func.__name__
-                print(f"-> Submitted {scraper_func.__name__} to the queue.")
-                # Stagger the launch of the next scraper
-                time.sleep(5) 
-            
+                future_to_scraper[future] = scraper_name
+                print(f"-> Submitted {scraper_name} to the queue.")
+                time.sleep(5)
+
             print("\n--- All scrapers submitted. Waiting for completion... ---")
-            
+
             for future in as_completed(future_to_scraper):
                 scraper_name = future_to_scraper[future]
+                status = "SUCCESS"
+                details = f"{scraper_name} completed successfully."
                 try:
                     future.result()
                     print(f"\n--- {scraper_name} Finished Successfully ---")
                 except Exception as exc:
+                    status = "FAILURE"
+                    details = f"{scraper_name} failed with exception: {exc}"
                     print(f"\n--- {scraper_name} Generated an Exception: {exc} ---")
+
+                # Log the final status
+                end_log = ScrapeLog(status=status, details=details)
+                db_session.add(end_log)
+                db_session.commit()
 
     except KeyboardInterrupt:
         print("\n\nKeyboard interrupt received. Signaling scrapers to shut down...")
         shutdown_event.set()
+        # Log the shutdown
+        shutdown_log = ScrapeLog(status="SHUTDOWN", details="Scraping process terminated by user.")
+        db_session.add(shutdown_log)
+        db_session.commit()
 
     finally:
+        db_session.close()
         print("\n--- All Scrapers Have Completed Their Execution ---")
+    
+    # --- Step 2: Run the product merging script after all scrapers are done ---
+    if not shutdown_event.is_set():
+        group_products_by_model()
 
 
 if __name__ == "__main__":

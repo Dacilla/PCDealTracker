@@ -11,6 +11,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Enum as SQLAlchemyEnum,
+    Table,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 import enum
@@ -22,6 +23,14 @@ class ProductStatus(enum.Enum):
 
 class Base(DeclarativeBase):
     pass
+
+# --- Association Table for Many-to-Many Relationship ---
+merged_product_association = Table(
+    'merged_product_association',
+    Base.metadata,
+    Column('merged_product_id', Integer, ForeignKey('merged_products.id'), primary_key=True),
+    Column('product_id', Integer, ForeignKey('products.id'), primary_key=True)
+)
 
 class Retailer(Base):
     __tablename__ = "retailers"
@@ -38,6 +47,7 @@ class Category(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
     products: Mapped[List["Product"]] = relationship(back_populates="category")
+    merged_products: Mapped[List["MergedProduct"]] = relationship(back_populates="category")
     def __repr__(self) -> str:
         return f"Category(id={self.id!r}, name={self.name!r})"
 
@@ -61,8 +71,27 @@ class Product(Base):
     price_history: Mapped[List["PriceHistory"]] = relationship(
         back_populates="product", cascade="all, delete-orphan"
     )
+    # Relationship to MergedProduct (many-to-many)
+    merged_products: Mapped[List["MergedProduct"]] = relationship(
+        secondary=merged_product_association, back_populates="products"
+    )
     def __repr__(self) -> str:
         return f"Product(id={self.id!r}, name={self.name!r}, price={self.current_price!r})"
+
+class MergedProduct(Base):
+    __tablename__ = "merged_products"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    canonical_name: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    brand: Mapped[str] = mapped_column(String, index=True, nullable=True)
+    model: Mapped[str] = mapped_column(String, index=True, nullable=True)
+    category_id: Mapped[int] = mapped_column(ForeignKey("categories.id"))
+    category: Mapped["Category"] = relationship(back_populates="merged_products")
+    # Relationship to individual Product listings
+    products: Mapped[List["Product"]] = relationship(
+        secondary=merged_product_association, back_populates="merged_products"
+    )
+    def __repr__(self) -> str:
+        return f"MergedProduct(id={self.id!r}, name={self.canonical_name!r})"
 
 class PriceHistory(Base):
     __tablename__ = "price_history"

@@ -6,6 +6,7 @@
     <title>PC Deal Tracker</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         body {
@@ -39,6 +40,18 @@
             transform: scale(0.95);
             transition: all 300ms ease-in;
         }
+        .chart-legend-item {
+            display: flex;
+            align-items: center;
+            margin-right: 16px;
+            font-size: 12px;
+        }
+        .chart-legend-color-box {
+            width: 12px;
+            height: 12px;
+            margin-right: 6px;
+            border-radius: 2px;
+        }
     </style>
 </head>
 <body class="bg-gray-100">
@@ -54,10 +67,6 @@
                 <ul id="category-list" class="space-y-1">
                     <!-- Categories will be dynamically inserted here -->
                 </ul>
-                 <h2 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mt-6 mb-2">Retailers</h2>
-                <ul id="retailer-list" class="space-y-1">
-                    <!-- Retailers will be dynamically inserted here -->
-                </ul>
             </nav>
         </aside>
 
@@ -65,11 +74,8 @@
         <main class="flex-1 flex flex-col overflow-hidden">
             <header class="bg-white shadow-sm p-4">
                 <div class="flex items-center justify-between space-x-4">
-                    <div id="view-tabs" class="flex border-b">
-                        <button data-view="products" class="tab-button py-2 px-4 border-b-2 border-blue-500 text-blue-600 font-semibold focus:outline-none">All Products</button>
-                        <button data-view="deals" class="tab-button py-2 px-4 text-gray-500 hover:text-blue-600 focus:outline-none">Deals</button>
-                    </div>
-                     <div class="relative flex-1 max-w-xs">
+                    <h2 id="current-view-title" class="text-xl font-semibold text-gray-700">All Products</h2>
+                     <div class="relative flex-1 max-w-md">
                         <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                             <svg class="h-5 w-5 text-gray-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                                 <path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd" />
@@ -77,14 +83,7 @@
                         </div>
                         <input type="search" id="search-input" placeholder="Search products..." class="block w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
                     </div>
-                    <div>
-                        <select id="sort-select" class="border border-gray-300 rounded-md text-sm">
-                            <option value="default">Sort by relevance</option>
-                            <option value="price_asc">Price: Low to High</option>
-                            <option value="price_desc">Price: High to Low</option>
-                        </select>
-                    </div>
-                    <div id="product-count" class="text-sm text-gray-600"></div>
+                    <div id="product-count" class="text-sm text-gray-600 font-medium"></div>
                 </div>
             </header>
 
@@ -110,20 +109,28 @@
         </main>
     </div>
 
-    <!-- Price History Modal -->
-    <div id="price-history-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 hidden modal-enter">
-        <div class="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-full flex flex-col">
+    <!-- Product Details Modal -->
+    <div id="product-details-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 hidden modal-enter">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-6xl max-h-full flex flex-col">
             <div class="flex justify-between items-center p-4 border-b">
-                <h2 class="text-lg font-semibold text-gray-800" id="modal-product-name">Product Price History</h2>
+                <h2 class="text-xl font-semibold text-gray-800" id="modal-product-name">Product Details</h2>
                 <button id="modal-close-button" class="text-gray-500 hover:text-gray-800 text-3xl leading-none">&times;</button>
             </div>
-            <div class="p-6 flex-1 overflow-y-auto">
-                <div class="relative h-96">
-                    <canvas id="price-chart"></canvas>
+            <div class="p-6 flex-1 overflow-y-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <!-- Left side: Current Listings -->
+                <div class="lg:col-span-1">
+                    <h3 class="text-lg font-semibold text-gray-700 mb-4">Current Listings</h3>
+                    <div id="modal-listings-container" class="space-y-3">
+                        <!-- Listings will be dynamically inserted here -->
+                    </div>
                 </div>
-            </div>
-            <div class="p-4 bg-gray-50 border-t flex justify-end">
-                <a id="modal-product-link" href="#" target="_blank" rel="noopener noreferrer" class="bg-blue-500 text-white px-4 py-2 rounded-md hover:bg-blue-600">View on Retailer Site</a>
+                <!-- Right side: Price History Chart -->
+                <div class="lg:col-span-2">
+                    <h3 class="text-lg font-semibold text-gray-700 mb-4">Combined Price History</h3>
+                    <div class="relative h-96">
+                        <canvas id="price-chart"></canvas>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -134,35 +141,40 @@
 
         // --- DOM Elements ---
         const categoryList = document.getElementById('category-list');
-        const retailerList = document.getElementById('retailer-list');
         const productGrid = document.getElementById('product-grid');
         const productCount = document.getElementById('product-count');
         const loadingSpinner = document.getElementById('loading-spinner');
         const errorMessage = document.getElementById('error-message');
-        const viewTabs = document.getElementById('view-tabs');
         const searchInput = document.getElementById('search-input');
-        const sortSelect = document.getElementById('sort-select');
         const paginationControls = document.getElementById('pagination-controls');
-        const priceHistoryModal = document.getElementById('price-history-modal');
+        const productDetailsModal = document.getElementById('product-details-modal');
         const modalCloseButton = document.getElementById('modal-close-button');
         const modalProductName = document.getElementById('modal-product-name');
-        const modalProductLink = document.getElementById('modal-product-link');
+        const modalListingsContainer = document.getElementById('modal-listings-container');
         const priceChartCanvas = document.getElementById('price-chart');
+        const currentViewTitle = document.getElementById('current-view-title');
 
         // --- State Management ---
         let currentState = {
-            view: 'products',
+            view: 'merged-products',
             categoryId: null,
-            retailerId: null,
             searchTerm: null,
-            sortBy: null,
-            sortOrder: 'asc',
             page: 1,
             pageSize: 50,
             totalProducts: 0
         };
         let priceChart = null;
         let debounceTimer;
+
+        // --- Utility Functions ---
+        function getRetailerColor(retailerName) {
+            const colors = ['#4F46E5', '#DB2777', '#16A34A', '#D97706', '#0891B2', '#6D28D9', '#BE185D', '#059669', '#9A3412'];
+            let hash = 0;
+            for (let i = 0; i < retailerName.length; i++) {
+                hash = retailerName.charCodeAt(i) + ((hash << 5) - hash);
+            }
+            return colors[Math.abs(hash) % colors.length];
+        }
 
         async function fetchData(endpoint, showLoading = true) {
             if (showLoading) {
@@ -172,9 +184,7 @@
             }
             try {
                 const response = await fetch(`${API_BASE_URL}/${endpoint}`);
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                 return await response.json();
             } catch (error) {
                 console.error("Fetch error:", error);
@@ -185,6 +195,7 @@
             }
         }
 
+        // --- Rendering Functions ---
         function renderProducts(products) {
             productGrid.innerHTML = '';
             if (!products || products.length === 0) {
@@ -193,24 +204,28 @@
             }
             products.forEach(product => {
                 const card = document.createElement('div');
-                card.className = 'product-card bg-white rounded-lg shadow-md overflow-hidden transform hover:-translate-y-1 transition-transform duration-300 cursor-pointer';
-                card.dataset.productId = product.id;
+                card.className = 'product-card bg-white rounded-lg shadow-md overflow-hidden transform hover:-translate-y-1 transition-transform duration-300 cursor-pointer flex flex-col';
+                card.dataset.mergedId = product.id;
                 
-                const onSaleBadge = product.on_sale ? `<span class="absolute top-2 right-2 bg-red-500 text-white text-xs font-bold px-2 py-1 rounded-full">DEAL</span>` : '';
-                const retailerLogo = product.retailer.logo_url ? `<img src="${product.retailer.logo_url}" alt="${product.retailer.name}" class="h-6 absolute bottom-2 right-2 opacity-70">` : '';
+                const bestPrice = product.best_price ? `$${product.best_price.toFixed(2)}` : 'N/A';
+                const bestRetailer = product.best_price_retailer || 'Unavailable';
+                const imageUrl = product.listings.length > 0 && product.listings[0].image_url ? product.listings[0].image_url : 'https://placehold.co/400x400/F0F0F0/AAAAAA?text=No+Image';
 
                 card.innerHTML = `
-                    <div class="relative">
-                        <img src="${product.image_url}" alt="${product.name}" class="w-full h-48 object-contain p-4 bg-white" onerror="this.src='https://placehold.co/400x400/F0F0F0/AAAAAA?text=No+Image'">
-                        ${onSaleBadge}
+                    <div class="relative p-4">
+                        <img src="${imageUrl}" alt="${product.canonical_name}" class="w-full h-48 object-contain" onerror="this.src='https://placehold.co/400x400/F0F0F0/AAAAAA?text=No+Image'">
                     </div>
-                    <div class="p-4 relative">
-                        <h3 class="text-sm font-semibold text-gray-800 h-20 overflow-hidden">${product.name}</h3>
-                        <p class="text-xs text-gray-500 mt-1">${product.retailer.name}</p>
-                        <div class="mt-4 flex items-center justify-between">
-                            <span class="text-lg font-bold text-gray-900">$${product.current_price ? product.current_price.toFixed(2) : 'N/A'}</span>
+                    <div class="p-4 border-t flex-grow flex flex-col justify-between">
+                        <div>
+                           <h3 class="text-sm font-semibold text-gray-800 h-16 overflow-hidden">${product.canonical_name}</h3>
                         </div>
-                        ${retailerLogo}
+                        <div class="mt-4">
+                           <p class="text-xs text-gray-500">Best Price</p>
+                           <div class="flex items-baseline justify-between">
+                                <span class="text-lg font-bold text-gray-900">${bestPrice}</span>
+                                <span class="text-xs font-medium text-gray-600">${bestRetailer}</span>
+                           </div>
+                        </div>
                     </div>
                 `;
                 productGrid.appendChild(card);
@@ -220,165 +235,183 @@
         function renderPagination() {
             const totalPages = Math.ceil(currentState.totalProducts / currentState.pageSize);
             paginationControls.innerHTML = '';
-
             if (totalPages <= 1) return;
 
-            // Previous Button
-            const prevButton = document.createElement('button');
-            prevButton.innerHTML = '&laquo;';
-            prevButton.className = 'px-3 py-1 rounded-md text-sm ' + (currentState.page === 1 ? 'text-gray-400 cursor-not-allowed' : 'text-blue-600 hover:bg-blue-100');
-            prevButton.disabled = currentState.page === 1;
-            prevButton.addEventListener('click', () => {
-                currentState.page--;
-                loadProducts();
-            });
-            paginationControls.appendChild(prevButton);
-
-            // Page Numbers
-            for (let i = 1; i <= totalPages; i++) {
-                const pageButton = document.createElement('button');
-                pageButton.textContent = i;
-                pageButton.className = 'px-3 py-1 rounded-md text-sm ' + (i === currentState.page ? 'bg-blue-500 text-white' : 'text-blue-600 hover:bg-blue-100');
-                pageButton.addEventListener('click', () => {
-                    currentState.page = i;
+            const createPageButton = (page) => {
+                const button = document.createElement('button');
+                button.textContent = page;
+                button.className = `px-3 py-1 rounded-md text-sm ${page === currentState.page ? 'bg-blue-500 text-white' : 'text-blue-600 hover:bg-blue-100'}`;
+                button.addEventListener('click', () => {
+                    currentState.page = page;
                     loadProducts();
                 });
-                paginationControls.appendChild(pageButton);
+                return button;
+            };
+            
+            const createEllipsis = () => {
+                const span = document.createElement('span');
+                span.textContent = '...';
+                span.className = 'px-3 py-1 text-gray-500';
+                return span;
+            };
+
+            const createNavButton = (text, page, isDisabled) => {
+                const button = document.createElement('button');
+                button.innerHTML = text;
+                button.disabled = isDisabled;
+                button.className = `px-3 py-1 rounded-md text-sm ${isDisabled ? 'text-gray-400 cursor-not-allowed' : 'text-blue-600 hover:bg-blue-100'}`;
+                if (!isDisabled) button.addEventListener('click', () => {
+                    currentState.page = page;
+                    loadProducts();
+                });
+                return button;
+            };
+
+            paginationControls.appendChild(createNavButton('&laquo;', currentState.page - 1, currentState.page === 1));
+
+            const pageNumbers = [];
+            const pageRange = 2; // How many pages to show around the current page
+
+            if (totalPages <= 5) {
+                for (let i = 1; i <= totalPages; i++) {
+                    pageNumbers.push(i);
+                }
+            } else {
+                pageNumbers.push(1);
+                if (currentState.page > pageRange + 1) {
+                    pageNumbers.push('...');
+                }
+
+                for (let i = Math.max(2, currentState.page - pageRange); i <= Math.min(totalPages - 1, currentState.page + pageRange); i++) {
+                    pageNumbers.push(i);
+                }
+
+                if (currentState.page < totalPages - pageRange) {
+                    pageNumbers.push('...');
+                }
+                pageNumbers.push(totalPages);
             }
 
-            // Next Button
-            const nextButton = document.createElement('button');
-            nextButton.innerHTML = '&raquo;';
-            nextButton.className = 'px-3 py-1 rounded-md text-sm ' + (currentState.page === totalPages ? 'text-gray-400 cursor-not-allowed' : 'text-blue-600 hover:bg-blue-100');
-            nextButton.disabled = currentState.page === totalPages;
-            nextButton.addEventListener('click', () => {
-                currentState.page++;
-                loadProducts();
+            // Remove duplicate '...'
+            const uniquePageNumbers = [...new Set(pageNumbers)];
+            uniquePageNumbers.forEach(page => {
+                 if (page === '...') {
+                    paginationControls.appendChild(createEllipsis());
+                } else {
+                    paginationControls.appendChild(createPageButton(page));
+                }
             });
-            paginationControls.appendChild(nextButton);
+
+            paginationControls.appendChild(createNavButton('&raquo;', currentState.page + 1, currentState.page === totalPages));
         }
 
-        function renderChart(historyData) {
-            if (priceChart) {
-                priceChart.destroy();
-            }
-            const labels = historyData.map(d => {
-                if (!d || !d.date) return 'Unknown Date';
-                const date = new Date(d.date);
-                if (isNaN(date)) return 'Invalid Date';
-                return date.toLocaleDateString('en-AU', { day: 'numeric', month: 'short' });
+        async function renderChart(mergedProductId) {
+            if (priceChart) priceChart.destroy();
+            
+            const historyData = await fetchData(`merged-products/${mergedProductId}/price-history`, false);
+            if (!historyData) return;
+
+            const datasets = {};
+            historyData.forEach(entry => {
+                if (!entry.retailer || !entry.retailer.name) return;
+                const retailerName = entry.retailer.name;
+                if (!datasets[retailerName]) {
+                    datasets[retailerName] = {
+                        label: retailerName,
+                        data: [],
+                        borderColor: getRetailerColor(retailerName),
+                        backgroundColor: getRetailerColor(retailerName) + '1A',
+                        tension: 0.1,
+                        fill: false,
+                    };
+                }
+                datasets[retailerName].data.push({ x: new Date(entry.date), y: entry.price });
             });
-            const prices = historyData.map(d => d.price);
+            
             const ctx = priceChartCanvas.getContext('2d');
             priceChart = new Chart(ctx, {
                 type: 'line',
-                data: {
-                    labels: labels,
-                    datasets: [{
-                        label: 'Price (AUD)',
-                        data: prices,
-                        borderColor: 'rgb(59, 130, 246)',
-                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                        fill: true,
-                        tension: 0.1
-                    }]
-                },
+                data: { datasets: Object.values(datasets) },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
                     scales: {
-                        y: {
-                            beginAtZero: false,
-                            ticks: {
-                                callback: function(value) { return '$' + value.toFixed(2); }
-                            }
-                        }
+                        x: { type: 'time', time: { unit: 'day' } },
+                        y: { beginAtZero: false, ticks: { callback: value => '$' + value.toFixed(2) } }
                     },
-                    plugins: {
-                        legend: { display: false },
-                        tooltip: {
-                            callbacks: {
-                                label: function(context) { return `Price: $${context.parsed.y.toFixed(2)}`; }
-                            }
-                        }
-                    }
+                    plugins: { legend: { display: true, position: 'bottom' } }
                 }
             });
         }
         
-        async function showPriceHistoryModal(productId) {
-            const [product, history] = await Promise.all([
-                fetchData(`products/${productId}`, false),
-                fetchData(`products/${productId}/price-history`, false)
-            ]);
-            if (!product || !history) {
-                alert("Could not load product details. Please try again.");
+        async function showProductDetailsModal(mergedId) {
+            const params = new URLSearchParams({ page: currentState.page, page_size: currentState.pageSize });
+            if(currentState.searchTerm) params.append('search', currentState.searchTerm);
+            if(currentState.categoryId) params.append('category_id', currentState.categoryId);
+            const data = await fetchData(`${currentState.view}?${params.toString()}`, false);
+            const product = data.products.find(p => p.id == mergedId);
+
+            if (!product) {
+                alert("Could not load product details.");
                 return;
             }
-            modalProductName.textContent = product.name;
-            modalProductLink.href = product.url;
-            renderChart(history);
-            priceHistoryModal.classList.remove('hidden');
+
+            modalProductName.textContent = product.canonical_name;
+            modalListingsContainer.innerHTML = '';
+            product.listings.forEach(listing => {
+                const listingEl = document.createElement('a');
+                listingEl.href = listing.url;
+                listingEl.target = '_blank';
+                listingEl.className = 'block p-3 rounded-md border hover:bg-gray-50';
+                listingEl.innerHTML = `
+                    <div class="flex justify-between items-center">
+                        <span class="font-medium text-gray-700">${listing.retailer.name}</span>
+                        <span class="font-bold text-lg ${listing.on_sale ? 'text-red-500' : 'text-gray-800'}">
+                            ${listing.current_price ? '$' + listing.current_price.toFixed(2) : 'N/A'}
+                        </span>
+                    </div>
+                `;
+                modalListingsContainer.appendChild(listingEl);
+            });
+            
+            renderChart(mergedId);
+
+            productDetailsModal.classList.remove('hidden');
             setTimeout(() => {
-                priceHistoryModal.classList.remove('modal-enter');
-                priceHistoryModal.classList.add('modal-enter-active');
+                productDetailsModal.classList.add('modal-enter-active');
             }, 10);
         }
 
-        function hidePriceHistoryModal() {
-            priceHistoryModal.classList.add('modal-leave-active');
-            priceHistoryModal.classList.remove('modal-enter-active');
+        function hideProductDetailsModal() {
+            productDetailsModal.classList.remove('modal-enter-active');
+            productDetailsModal.classList.add('modal-leave-active');
             setTimeout(() => {
-                priceHistoryModal.classList.add('hidden');
-                priceHistoryModal.classList.remove('modal-leave-active');
-                priceHistoryModal.classList.add('modal-enter');
+                productDetailsModal.classList.add('hidden');
+                productDetailsModal.classList.remove('modal-leave-active');
             }, 300);
         }
 
-        async function loadCategoriesAndRetailers() {
-            const [categories, retailers] = await Promise.all([
-                fetchData('categories', false),
-                fetchData('retailers', false)
-            ]);
-
+        // --- Data Loading ---
+        async function loadCategories() {
+            const categories = await fetchData('categories', false);
             if (categories) {
-                categoryList.innerHTML = `<li><button class="w-full text-left py-2 px-4 rounded-md text-sm font-medium bg-blue-100 text-blue-700 filter-button" data-type="category" data-id="all">All Categories</button></li>`;
+                categoryList.innerHTML = `<li><button class="w-full text-left py-2 px-4 rounded-md text-sm font-medium bg-blue-100 text-blue-700 filter-button" data-id="all">All Categories</button></li>`;
                 categories.forEach(category => {
                     const li = document.createElement('li');
-                    li.innerHTML = `<button class="w-full text-left py-2 px-4 rounded-md text-sm font-medium text-gray-600 hover:bg-gray-200 hover:text-gray-900 filter-button" data-type="category" data-id="${category.id}">${category.name}</button>`;
+                    li.innerHTML = `<button class="w-full text-left py-2 px-4 rounded-md text-sm font-medium text-gray-600 hover:bg-gray-200 hover:text-gray-900 filter-button" data-id="${category.id}">${category.name}</button>`;
                     categoryList.appendChild(li);
-                });
-            }
-
-            if (retailers) {
-                retailerList.innerHTML = `<li><button class="w-full text-left py-2 px-4 rounded-md text-sm font-medium text-gray-600 hover:bg-gray-200 hover:text-gray-900 filter-button" data-type="retailer" data-id="all">All Retailers</button></li>`;
-                retailers.forEach(retailer => {
-                    const li = document.createElement('li');
-                    li.innerHTML = `<button class="w-full text-left py-2 px-4 rounded-md text-sm font-medium text-gray-600 hover:bg-gray-200 hover:text-gray-900 filter-button" data-type="retailer" data-id="${retailer.id}">${retailer.name}</button>`;
-                    retailerList.appendChild(li);
                 });
             }
         }
         
         async function loadProducts() {
-            let baseEndpoint = currentState.view;
-            let endpoint = '';
             const params = new URLSearchParams();
-
-            if (currentState.categoryId) {
-                endpoint = `${baseEndpoint}/category/${currentState.categoryId}`;
-            } else {
-                endpoint = baseEndpoint;
-            }
-
             params.append('page', currentState.page);
             params.append('page_size', currentState.pageSize);
             if (currentState.searchTerm) params.append('search', currentState.searchTerm);
-            if (currentState.sortBy) params.append('sort_by', currentState.sortBy);
-            if (currentState.sortOrder) params.append('sort_order', currentState.sortOrder);
-            if (currentState.retailerId) params.append('retailer_id', currentState.retailerId);
+            if (currentState.categoryId) params.append('category_id', currentState.categoryId);
             
-            const finalUrl = `${endpoint}?${params.toString()}`;
+            const finalUrl = `${currentState.view}?${params.toString()}`;
             const data = await fetchData(finalUrl);
             if (data) {
                 currentState.totalProducts = data.total;
@@ -388,86 +421,47 @@
             }
         }
 
-        function updateActiveUI() {
-            document.querySelectorAll('.tab-button').forEach(button => {
-                button.classList.toggle('border-blue-500', button.dataset.view === currentState.view);
-                button.classList.toggle('text-blue-600', button.dataset.view === currentState.view);
-                button.classList.toggle('font-semibold', button.dataset.view === currentState.view);
-                button.classList.toggle('text-gray-500', button.dataset.view !== currentState.view);
-            });
-
-            document.querySelectorAll('.filter-button').forEach(button => {
-                const type = button.dataset.type;
-                const id = button.dataset.id === 'all' ? null : parseInt(button.dataset.id);
-                const isActive = id === currentState[`${type}Id`];
+        // --- Event Handlers ---
+        function handleCategoryClick(e) {
+            if (e.target.matches('.filter-button')) {
+                const id = e.target.dataset.id;
+                currentState.categoryId = id === 'all' ? null : parseInt(id);
+                currentState.page = 1;
                 
-                button.classList.toggle('bg-blue-100', isActive);
-                button.classList.toggle('text-blue-700', isActive);
-                button.classList.toggle('text-gray-600', !isActive);
-            });
+                document.querySelectorAll('#category-list .filter-button').forEach(btn => {
+                    btn.classList.toggle('bg-blue-100', btn.dataset.id === id);
+                    btn.classList.toggle('text-blue-700', btn.dataset.id === id);
+                });
+                currentViewTitle.textContent = e.target.textContent;
+
+                loadProducts();
+            }
         }
 
-        // --- Event Listeners ---
-        viewTabs.addEventListener('click', (e) => {
-            if (e.target.matches('.tab-button')) {
-                currentState.view = e.target.dataset.view;
-                currentState.page = 1;
-                updateActiveUI();
-                loadProducts();
-            }
-        });
-
-        document.getElementById('category-nav').addEventListener('click', (e) => {
-            if (e.target.matches('.filter-button')) {
-                const type = e.target.dataset.type;
-                const id = e.target.dataset.id;
-                currentState[`${type}Id`] = id === 'all' ? null : parseInt(id);
-                currentState.page = 1;
-                updateActiveUI();
-                loadProducts();
-            }
-        });
-
-        productGrid.addEventListener('click', (e) => {
-            const card = e.target.closest('.product-card');
-            if (card) {
-                showPriceHistoryModal(card.dataset.productId);
-            }
-        });
-
-        searchInput.addEventListener('input', (e) => {
+        function handleSearch(e) {
             clearTimeout(debounceTimer);
             debounceTimer = setTimeout(() => {
                 currentState.searchTerm = e.target.value.trim() || null;
                 currentState.page = 1;
                 loadProducts();
             }, 300);
-        });
-
-        sortSelect.addEventListener('change', (e) => {
-            const value = e.target.value;
-            if (value === 'default') {
-                currentState.sortBy = null;
-            } else {
-                const [sortBy, sortOrder] = value.split('_');
-                currentState.sortBy = sortBy;
-                currentState.sortOrder = sortOrder;
-            }
-            currentState.page = 1;
-            loadProducts();
-        });
-
-        modalCloseButton.addEventListener('click', hidePriceHistoryModal);
-        priceHistoryModal.addEventListener('click', (e) => {
-            if (e.target === priceHistoryModal) {
-                hidePriceHistoryModal();
-            }
-        });
-
+        }
+        
+        // --- Initialization ---
         document.addEventListener('DOMContentLoaded', () => {
-            loadCategoriesAndRetailers();
+            loadCategories();
             loadProducts();
-            updateActiveUI();
+            
+            categoryList.addEventListener('click', handleCategoryClick);
+            searchInput.addEventListener('input', handleSearch);
+            productGrid.addEventListener('click', (e) => {
+                const card = e.target.closest('.product-card');
+                if (card) showProductDetailsModal(card.dataset.mergedId);
+            });
+            modalCloseButton.addEventListener('click', hideProductDetailsModal);
+            productDetailsModal.addEventListener('click', (e) => {
+                if (e.target === productDetailsModal) hideProductDetailsModal();
+            });
         });
 
     </script>
