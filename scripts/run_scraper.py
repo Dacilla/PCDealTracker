@@ -18,6 +18,8 @@ from backend.app.scrapers.msy_scraper import run_msy_scraper
 from backend.app.scrapers.umart_scraper import run_umart_scraper
 from backend.app.scrapers.computeralliance_scraper import run_computeralliance_scraper
 from backend.app.scrapers.jw_scraper import run_jw_scraper
+from backend.app.scrapers.shoppingexpress_scraper import run_shoppingexpress_scraper
+# from backend.app.scrapers.austin_scraper import run_austin_scraper # Temporarily disabled
 
 # A list of all scraper functions to be executed
 ALL_SCRAPERS = [
@@ -28,6 +30,8 @@ ALL_SCRAPERS = [
     run_umart_scraper,
     run_computeralliance_scraper,
     run_jw_scraper,
+    run_shoppingexpress_scraper,
+    # run_austin_scraper, # Temporarily disabled
 ]
 
 def main():

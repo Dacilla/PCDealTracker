@@ -16,6 +16,8 @@ RETAILERS = [
     {"name": "Umart", "url": "https://www.umart.com.au", "logo_url": "https://www.umart.com.au/images/logo_umart.png"},
     {"name": "Computer Alliance", "url": "https://www.computeralliance.com.au", "logo_url": "https://www.computeralliance.com.au/images/ca_logo.png"},
     {"name": "JW Computers", "url": "https://www.jw.com.au", "logo_url": "https://www.jw.com.au/static/version1753773075/frontend/JWC/base/en_AU/images/logo.svg"},
+    {"name": "Shopping Express", "url": "https://www.shoppingexpress.com.au", "logo_url": "https://www.shoppingexpress.com.au/assets/logo-110001.png"},
+    {"name": "Austin Computers", "url": "https://www.austin.net.au", "logo_url": "https://www.austin.net.au/media/logo/stores/1/logo.png"},
 ]
 
 CATEGORIES = [
@@ -55,7 +57,7 @@ def setup_database():
                 print(f"  Added retailer: {retailer.name}")
             else:
                 exists.url = retailer_data["url"]
-                exists.logo_url = retailer_data["logo_url"]
+                exists.logo_url = retailer_data.get("logo_url")
                 print(f"  Updated (already exists): {retailer_data['name']}")
         
         print("\nSeeding categories...")
