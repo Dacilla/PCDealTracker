@@ -56,11 +56,36 @@
             <header class="bg-white shadow-sm p-4">
                 <div class="flex items-center justify-between space-x-4">
                     <h2 id="current-view-title" class="text-xl font-semibold text-gray-700">All Products</h2>
-                     <div class="relative flex-1 max-w-md">
-                        <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                            <svg class="h-5 w-5 text-gray-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd" /></svg>
+                     <div class="flex-1 max-w-md flex items-center space-x-2">
+                        <div class="relative flex-grow">
+                            <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                <svg class="h-5 w-5 text-gray-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd" /></svg>
+                            </div>
+                            <input type="search" id="search-input" placeholder="Search products..." class="block w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
                         </div>
-                        <input type="search" id="search-input" placeholder="Search products..." class="block w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+                        <div class="relative z-10">
+                            <button id="search-settings-button" type="button" class="p-2 rounded-md border border-gray-300 bg-white text-gray-500 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+                                <svg class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                            </button>
+                            <div id="search-options" class="origin-top-right absolute right-0 mt-2 w-48 rounded-md shadow-lg bg-white ring-1 ring-black ring-opacity-5 focus:outline-none hidden">
+                                <div class="py-1">
+                                    <a href="#" class="flex items-center justify-between text-gray-700 block px-4 py-2 text-sm hover:bg-gray-100" data-search-mode="loose" title="Returns products that contain all of the search words, in any order.">
+                                        <span class="flex items-center">
+                                            <svg class="h-4 w-4 mr-2 checkmark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" /></svg>
+                                            Loose
+                                        </span>
+                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                                    </a>
+                                    <a href="#" class="flex items-center justify-between text-gray-700 block px-4 py-2 text-sm hover:bg-gray-100" data-search-mode="strict" title="Returns products that contain the exact phrase you entered.">
+                                        <span class="flex items-center">
+                                            <svg class="h-4 w-4 mr-2 checkmark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" /></svg>
+                                            Strict
+                                        </span>
+                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                     <!-- Custom Sort Dropdown -->
                     <div class="relative inline-block text-left z-10">
@@ -76,6 +101,9 @@
                                 <a href="#" class="text-gray-700 block px-4 py-2 text-sm hover:bg-gray-100" role="menuitem" data-sort-by="name" data-sort-order="desc">Sort by Name (Z-A)</a>
                                 <a href="#" class="text-gray-700 block px-4 py-2 text-sm hover:bg-gray-100" role="menuitem" data-sort-by="price" data-sort-order="asc">Price: Low to High</a>
                                 <a href="#" class="text-gray-700 block px-4 py-2 text-sm hover:bg-gray-100" role="menuitem" data-sort-by="price" data-sort-order="desc">Price: High to Low</a>
+                                <a href="#" class="text-gray-700 block px-4 py-2 text-sm hover:bg-gray-100" role="menuitem" data-sort-by="recent" data-sort-order="desc">Most Recent Change</a>
+                                <a href="#" class="text-gray-700 block px-4 py-2 text-sm hover:bg-gray-100" role="menuitem" data-sort-by="discount" data-sort-order="desc">Biggest Discount (%)</a>
+                                <a href="#" class="text-gray-700 block px-4 py-2 text-sm hover:bg-gray-100" role="menuitem" data-sort-by="discount_amount" data-sort-order="desc">Biggest Discount ($)</a>
                             </div>
                         </div>
                     </div>
@@ -145,6 +173,8 @@
         const loadingSpinner = document.getElementById('loading-spinner');
         const errorMessage = document.getElementById('error-message');
         const searchInput = document.getElementById('search-input');
+        const searchSettingsButton = document.getElementById('search-settings-button');
+        const searchOptions = document.getElementById('search-options');
         const sortButton = document.getElementById('sort-button');
         const sortButtonText = document.getElementById('sort-button-text');
         const sortChevron = document.getElementById('sort-chevron');
@@ -165,6 +195,7 @@
             categoryId: null,
             categoryName: 'All Products',
             searchTerm: null,
+            searchMode: 'loose',
             sortBy: 'name',
             sortOrder: 'asc',
             activeFilters: {}, // For dynamic filters like { socket: 'AM5', min_vram: 8 }
@@ -217,13 +248,29 @@
                 card.className = 'product-card bg-white rounded-lg shadow-md overflow-hidden transform hover:-translate-y-1 transition-transform duration-300 cursor-pointer flex flex-col';
                 card.dataset.mergedId = product.id;
                 
-                const bestPrice = product.best_price ? `$${product.best_price.toFixed(2)}` : 'N/A';
+                const bestPrice = product.best_price ? product.best_price : null;
+                const msrp = product.msrp ? product.msrp : null;
+                let discountBadge = '';
+                let priceDisplay = `<span class="text-lg font-bold text-gray-900">${bestPrice ? '$' + bestPrice.toFixed(2) : 'N/A'}</span>`;
+
+                if (bestPrice && msrp && bestPrice < msrp) {
+                    const discount = Math.round(((msrp - bestPrice) / msrp) * 100);
+                    discountBadge = `<span class="absolute top-2 right-2 bg-green-500 text-white text-xs font-bold px-2 py-1 rounded-full">${discount}% OFF</span>`;
+                    priceDisplay = `
+                        <div class="flex items-baseline space-x-2">
+                            <span class="text-lg font-bold text-red-600">$${bestPrice.toFixed(2)}</span>
+                            <span class="text-sm text-gray-500 line-through">$${msrp.toFixed(2)}</span>
+                        </div>
+                    `;
+                }
+
                 const bestRetailer = product.best_price_retailer || 'Unavailable';
                 const imageUrl = product.listings.length > 0 && product.listings[0].image_url ? product.listings[0].image_url : 'https://placehold.co/400x400/F0F0F0/AAAAAA?text=No+Image';
 
                 card.innerHTML = `
                     <div class="relative p-4">
                         <img src="${imageUrl}" alt="${product.canonical_name}" class="w-full h-48 object-contain" onerror="this.src='https://placehold.co/400x400/F0F0F0/AAAAAA?text=No+Image'">
+                        ${discountBadge}
                     </div>
                     <div class="p-4 border-t flex-grow flex flex-col justify-between">
                         <div>
@@ -231,8 +278,8 @@
                         </div>
                         <div class="mt-4">
                            <p class="text-xs text-gray-500">Best Price</p>
-                           <div class="flex items-baseline justify-between">
-                                <span class="text-lg font-bold text-gray-900">${bestPrice}</span>
+                           <div class="flex items-center justify-between">
+                                ${priceDisplay}
                                 <span class="text-xs font-medium text-gray-600">${bestRetailer}</span>
                            </div>
                         </div>
@@ -476,22 +523,13 @@
         }
         
         async function showProductDetailsModal(mergedId) {
-            // FIX: Instead of re-fetching the whole list, we now fetch just the one product we need.
-            // This is more efficient and avoids the previous bug.
-            const data = await fetchData(`${currentState.view}?id=${mergedId}`, false);
-            if (!data || !data.products || data.products.length === 0) {
-                 // Fallback for when the single-product fetch isn't implemented or fails
-                const listData = await fetchData(`${currentState.view}?${new URLSearchParams(currentState)}`, false);
-                const product = listData.products.find(p => p.id == mergedId);
-                if (!product) {
-                    alert("Could not load product details.");
-                    console.error("Failed to find product in fallback fetch as well.");
-                    return;
-                }
-                 handleModalData(product);
-            } else {
-                 handleModalData(data.products[0]);
+            const product = await fetchData(`${currentState.view}/${mergedId}`, false);
+            if (!product) {
+                alert("Could not load product details.");
+                console.error("Failed to fetch single product with ID:", mergedId);
+                return;
             }
+            handleModalData(product);
         }
 
         function handleModalData(product) {
@@ -554,6 +592,7 @@
             params.append('page', currentState.page);
             params.append('page_size', currentState.pageSize);
             if (currentState.searchTerm) params.append('search', currentState.searchTerm);
+            if (currentState.searchMode) params.append('search_mode', currentState.searchMode);
             if (currentState.categoryId) params.append('category_id', currentState.categoryId);
             if (currentState.sortBy) params.append('sort_by', currentState.sortBy);
             if (currentState.sortOrder) params.append('sort_order', currentState.sortOrder);
@@ -610,6 +649,18 @@
                 loadProducts();
                 renderActiveFilters();
             }, 300);
+        }
+
+        function handleSearchModeChange(e) {
+            const selectedOption = e.target.closest('[data-search-mode]');
+            if (!selectedOption) return;
+            e.preventDefault();
+            currentState.searchMode = selectedOption.dataset.searchMode;
+            updateSearchModeUI();
+            if (currentState.searchTerm) {
+                loadProducts();
+            }
+            toggleSearchDropdown();
         }
 
         function handleSortChange(e) {
@@ -713,18 +764,34 @@
             }
         }
         
-        function toggleSortDropdown() {
-            const isHidden = sortOptions.classList.contains('hidden');
+        function toggleDropdown(optionsEl, chevronEl) {
+             const isHidden = optionsEl.classList.contains('hidden');
             if (isHidden) {
-                sortOptions.classList.remove('hidden', 'opacity-0', 'scale-95');
-                sortOptions.classList.add('opacity-100', 'scale-100');
-                sortChevron.classList.add('rotate-180');
+                optionsEl.classList.remove('hidden', 'opacity-0', 'scale-95');
+                optionsEl.classList.add('opacity-100', 'scale-100');
+                if(chevronEl) chevronEl.classList.add('rotate-180');
             } else {
-                sortOptions.classList.remove('opacity-100', 'scale-100');
-                sortOptions.classList.add('opacity-0', 'scale-95');
-                sortChevron.classList.remove('rotate-180');
-                setTimeout(() => sortOptions.classList.add('hidden'), 100);
+                optionsEl.classList.remove('opacity-100', 'scale-100');
+                optionsEl.classList.add('opacity-0', 'scale-95');
+                if(chevronEl) chevronEl.classList.remove('rotate-180');
+                setTimeout(() => optionsEl.classList.add('hidden'), 100);
             }
+        }
+
+        const toggleSortDropdown = () => toggleDropdown(sortOptions, sortChevron);
+        const toggleSearchDropdown = () => toggleDropdown(searchOptions, null);
+
+        function updateSearchModeUI() {
+            document.querySelectorAll('[data-search-mode]').forEach(el => {
+                const checkmark = el.querySelector('.checkmark');
+                if (el.dataset.searchMode === currentState.searchMode) {
+                    checkmark.classList.remove('hidden');
+                    el.classList.add('bg-gray-100');
+                } else {
+                    checkmark.classList.add('hidden');
+                    el.classList.remove('bg-gray-100');
+                }
+            });
         }
 
         // --- Initialization ---
@@ -732,10 +799,13 @@
             loadCategories();
             renderGlobalFilters();
             loadProducts();
+            updateSearchModeUI();
             
             categoryList.addEventListener('click', handleCategoryClick);
             dynamicFiltersContainer.addEventListener('click', handleDynamicFilterChange);
             searchInput.addEventListener('input', handleSearch);
+            searchSettingsButton.addEventListener('click', toggleSearchDropdown);
+            searchOptions.addEventListener('click', handleSearchModeChange);
             sortButton.addEventListener('click', toggleSortDropdown);
             sortOptions.addEventListener('click', handleSortChange);
             activeFiltersContainer.addEventListener('click', handleFilterRemoval);
@@ -751,6 +821,9 @@
             window.addEventListener('click', (e) => {
                 if (!sortButton.contains(e.target) && !sortOptions.contains(e.target)) {
                     if (!sortOptions.classList.contains('hidden')) toggleSortDropdown();
+                }
+                if (!searchSettingsButton.contains(e.target) && !searchOptions.contains(e.target)) {
+                    if (!searchOptions.classList.contains('hidden')) toggleSearchDropdown();
                 }
             });
         });
