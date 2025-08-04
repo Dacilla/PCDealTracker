@@ -12,6 +12,7 @@ from sqlalchemy import (
     ForeignKey,
     Enum as SQLAlchemyEnum,
     Table,
+    JSON, # Import the JSON type
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 import enum
@@ -37,7 +38,7 @@ class Retailer(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     url: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
-    logo_url: Mapped[str] = mapped_column(String(255), nullable=True) # New column
+    logo_url: Mapped[str] = mapped_column(String(255), nullable=True)
     products: Mapped[List["Product"]] = relationship(back_populates="retailer")
     def __repr__(self) -> str:
         return f"Retailer(id={self.id!r}, name={self.name!r})"
@@ -71,7 +72,6 @@ class Product(Base):
     price_history: Mapped[List["PriceHistory"]] = relationship(
         back_populates="product", cascade="all, delete-orphan"
     )
-    # Relationship to MergedProduct (many-to-many)
     merged_products: Mapped[List["MergedProduct"]] = relationship(
         secondary=merged_product_association, back_populates="products"
     )
@@ -85,8 +85,9 @@ class MergedProduct(Base):
     brand: Mapped[str] = mapped_column(String, index=True, nullable=True)
     model: Mapped[str] = mapped_column(String, index=True, nullable=True)
     category_id: Mapped[int] = mapped_column(ForeignKey("categories.id"))
+    # --- New field for flexible attributes ---
+    attributes: Mapped[dict] = mapped_column(JSON, nullable=True)
     category: Mapped["Category"] = relationship(back_populates="merged_products")
-    # Relationship to individual Product listings
     products: Mapped[List["Product"]] = relationship(
         secondary=merged_product_association, back_populates="merged_products"
     )

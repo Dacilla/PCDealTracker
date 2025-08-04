@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 # --- Import all API routers ---
-from .api import deals, products, price_history, categories, retailers, merged_products
+from .api import deals, products, price_history, categories, retailers, merged_products, filters
 from .database import Base
 from .dependencies import engine
 
@@ -29,13 +29,13 @@ app.add_middleware(
 )
 
 # --- Include all API routers ---
-# This makes the endpoints from each file available in the application.
 app.include_router(products.router)
 app.include_router(deals.router)
 app.include_router(price_history.router)
 app.include_router(categories.router)
 app.include_router(retailers.router)
-app.include_router(merged_products.router) # <-- Add the new router
+app.include_router(merged_products.router)
+app.include_router(filters.router) # <-- Add the new filters router
 
 @app.get("/")
 def read_root():

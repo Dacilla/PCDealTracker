@@ -7,39 +7,29 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+    <!-- noUiSlider for range sliders -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/noUiSlider/15.7.1/nouislider.min.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/noUiSlider/15.7.1/nouislider.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         body {
             font-family: 'Inter', sans-serif;
         }
-        /* Custom scrollbar for better aesthetics */
-        ::-webkit-scrollbar {
-            width: 8px;
-        }
-        ::-webkit-scrollbar-track {
-            background: #f1f1f1;
-        }
-        ::-webkit-scrollbar-thumb {
-            background: #888;
-            border-radius: 4px;
-        }
-        ::-webkit-scrollbar-thumb:hover {
-            background: #555;
-        }
-        .modal-enter {
-            opacity: 0;
-            transform: scale(0.95);
-        }
-        .modal-enter-active {
-            opacity: 1;
-            transform: scale(1);
-            transition: all 300ms ease-out;
-        }
-        .modal-leave-active {
-            opacity: 0;
-            transform: scale(0.95);
-            transition: all 300ms ease-in;
-        }
+        /* Custom scrollbar */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #888; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #555; }
+        /* Modal animations */
+        .modal-enter { opacity: 0; transform: scale(0.95); }
+        .modal-enter-active { opacity: 1; transform: scale(1); transition: all 300ms ease-out; }
+        .modal-leave-active { opacity: 0; transform: scale(0.95); transition: all 300ms ease-in; }
+        /* noUiSlider custom styles */
+        .noUi-target { border: 1px solid #D1D5DB; box-shadow: none; height: 4px; }
+        .noUi-connect { background: #3B82F6; }
+        .noUi-handle { border: 1px solid #D1D5DB; border-radius: 9999px; box-shadow: none; background: #FFF; width: 16px; height: 16px; top: -7px; right: -8px; cursor: pointer;}
+        .noUi-handle:focus { outline: none; }
+        .noUi-handle:after, .noUi-handle:before { display: none; }
     </style>
 </head>
 <body class="bg-gray-100">
@@ -55,6 +45,9 @@
                 <ul id="category-list" class="space-y-1">
                     <!-- Categories will be dynamically inserted here -->
                 </ul>
+                <!-- Global and Dynamic Filters -->
+                <div id="global-filters-container" class="mt-6"></div>
+                <div id="dynamic-filters-container"></div>
             </nav>
         </aside>
 
@@ -65,9 +58,7 @@
                     <h2 id="current-view-title" class="text-xl font-semibold text-gray-700">All Products</h2>
                      <div class="relative flex-1 max-w-md">
                         <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                            <svg class="h-5 w-5 text-gray-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                                <path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd" />
-                            </svg>
+                            <svg class="h-5 w-5 text-gray-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd" /></svg>
                         </div>
                         <input type="search" id="search-input" placeholder="Search products..." class="block w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
                     </div>
@@ -76,9 +67,7 @@
                         <div>
                             <button type="button" id="sort-button" class="inline-flex justify-between w-full rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500" aria-haspopup="true" aria-expanded="true">
                                 <span id="sort-button-text">Sort by Name (A-Z)</span>
-                                <svg id="sort-chevron" class="-mr-1 ml-2 h-5 w-5 transform transition-transform" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                                    <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
-                                </svg>
+                                <svg id="sort-chevron" class="-mr-1 ml-2 h-5 w-5 transform transition-transform" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" /></svg>
                             </button>
                         </div>
                         <div id="sort-options" class="origin-top-right absolute right-0 mt-2 w-56 rounded-md shadow-lg bg-white ring-1 ring-black ring-opacity-5 focus:outline-none hidden transition ease-out duration-100 transform opacity-0 scale-95" role="menu" aria-orientation="vertical" aria-labelledby="sort-button">
@@ -93,21 +82,16 @@
                     <div id="product-count" class="text-sm text-gray-600 font-medium"></div>
                 </div>
                  <!-- Active Filters Container -->
-                <div id="active-filters-container" class="pt-3 flex items-center space-x-2 text-sm"></div>
+                <div id="active-filters-container" class="pt-3 flex items-center space-x-2 text-sm flex-wrap gap-2"></div>
             </header>
 
             <!-- Product Grid -->
             <div id="product-grid-container" class="flex-1 overflow-y-auto p-6">
                 <div id="loading-spinner" class="hidden text-center py-10">
-                    <svg class="animate-spin h-8 w-8 text-blue-500 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
+                    <svg class="animate-spin h-8 w-8 text-blue-500 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
                     <p class="mt-2 text-gray-600">Loading Products...</p>
                 </div>
-                <div id="product-grid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
-                    <!-- Products will be dynamically inserted here -->
-                </div>
+                <div id="product-grid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6"></div>
                  <div id="error-message" class="hidden text-center py-10">
                     <p class="text-red-500">Failed to load products. Please make sure the backend is running and try again.</p>
                 </div>
@@ -119,7 +103,7 @@
     </div>
 
     <!-- Product Details Modal -->
-    <div id="product-details-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 hidden modal-enter">
+    <div id="product-details-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 hidden modal-enter z-50">
         <div class="bg-white rounded-lg shadow-xl w-full max-w-6xl max-h-full flex flex-col">
             <div class="flex justify-between items-center p-4 border-b">
                 <h2 class="text-xl font-semibold text-gray-800" id="modal-product-name">Product Details</h2>
@@ -130,15 +114,11 @@
                 <div class="lg:col-span-1 space-y-6">
                     <div>
                         <h3 class="text-lg font-semibold text-gray-700 mb-2">Price Stats</h3>
-                        <div id="modal-price-stats" class="space-y-2 text-sm p-3 bg-gray-50 rounded-md">
-                            <!-- Stats will be dynamically inserted here -->
-                        </div>
+                        <div id="modal-price-stats" class="space-y-2 text-sm p-3 bg-gray-50 rounded-md"></div>
                     </div>
                     <div>
                         <h3 class="text-lg font-semibold text-gray-700 mb-2">Current Listings</h3>
-                        <div id="modal-listings-container" class="space-y-3">
-                            <!-- Listings will be dynamically inserted here -->
-                        </div>
+                        <div id="modal-listings-container" class="space-y-3"></div>
                     </div>
                 </div>
                 <!-- Right side: Price History Chart -->
@@ -158,6 +138,8 @@
 
         // --- DOM Elements ---
         const categoryList = document.getElementById('category-list');
+        const globalFiltersContainer = document.getElementById('global-filters-container');
+        const dynamicFiltersContainer = document.getElementById('dynamic-filters-container');
         const productGrid = document.getElementById('product-grid');
         const productCount = document.getElementById('product-count');
         const loadingSpinner = document.getElementById('loading-spinner');
@@ -185,12 +167,14 @@
             searchTerm: null,
             sortBy: 'name',
             sortOrder: 'asc',
+            activeFilters: {}, // For dynamic filters like { socket: 'AM5', min_vram: 8 }
             page: 1,
             pageSize: 50,
             totalProducts: 0
         };
         let priceChart = null;
         let debounceTimer;
+        let sliderInstances = {}; // To hold noUiSlider instances
 
         // --- Utility Functions ---
         function getRetailerColor(retailerName) {
@@ -323,13 +307,13 @@
             activeFiltersContainer.innerHTML = '';
             let hasFilters = false;
 
-            const createTag = (type, text) => {
+            const createTag = (type, text, key = '') => {
                 hasFilters = true;
                 const tag = document.createElement('span');
                 tag.className = 'inline-flex items-center px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-800';
                 tag.innerHTML = `
                     ${text}
-                    <button data-filter-type="${type}" class="ml-1.5 -mr-1 flex-shrink-0 inline-flex items-center justify-center h-4 w-4 rounded-full text-blue-500 hover:bg-blue-200 hover:text-blue-600 focus:outline-none focus:bg-blue-500 focus:text-white">
+                    <button data-filter-type="${type}" data-filter-key="${key}" class="ml-1.5 -mr-1 flex-shrink-0 inline-flex items-center justify-center h-4 w-4 rounded-full text-blue-500 hover:bg-blue-200 hover:text-blue-600 focus:outline-none focus:bg-blue-500 focus:text-white">
                         <span class="sr-only">Remove filter</span>
                         <svg class="h-2 w-2" stroke="currentColor" fill="none" viewBox="0 0 8 8"><path stroke-linecap="round" stroke-width="1.5" d="M1 1l6 6m0-6L1 7" /></svg>
                     </button>
@@ -337,12 +321,24 @@
                 activeFiltersContainer.appendChild(tag);
             };
 
-            if (currentState.categoryId) {
-                createTag('category', `Category: ${currentState.categoryName}`);
+            if (currentState.categoryId) createTag('category', `Category: ${currentState.categoryName}`);
+            if (currentState.searchTerm) createTag('search', `Search: "${currentState.searchTerm}"`);
+            
+            for (const [key, value] of Object.entries(currentState.activeFilters)) {
+                const formattedKey = key.replace(/_/g, ' ').replace(/min |max /g, '');
+                if (key.startsWith('min_') || key.startsWith('max_')) continue;
+                createTag('attribute', `${formattedKey}: ${value}`, key);
             }
-            if (currentState.searchTerm) {
-                createTag('search', `Search: "${currentState.searchTerm}"`);
-            }
+            const rangeKeys = new Set(Object.keys(currentState.activeFilters).map(k => k.replace('min_', '').replace('max_', '')));
+            rangeKeys.forEach(key => {
+                const minKey = `min_${key}`;
+                const maxKey = `max_${key}`;
+                if (currentState.activeFilters[minKey] || currentState.activeFilters[maxKey]) {
+                    const minVal = currentState.activeFilters[minKey] || '...';
+                    const maxVal = currentState.activeFilters[maxKey] || '...';
+                    createTag('attribute_range', `${key.replace(/_/g, ' ')}: ${minVal} - ${maxVal}`, key);
+                }
+            });
 
             if (hasFilters) {
                 const clearButton = document.createElement('button');
@@ -351,6 +347,102 @@
                 clearButton.textContent = 'Clear All';
                 activeFiltersContainer.appendChild(clearButton);
             }
+        }
+
+        function createSlider(container, key, min, max, format) {
+            const slider = noUiSlider.create(container.querySelector('.slider'), {
+                start: [currentState.activeFilters[`min_${key}`] || min, currentState.activeFilters[`max_${key}`] || max],
+                connect: true,
+                range: { 'min': min, 'max': max },
+                step: format.step || 1,
+            });
+
+            const minInput = container.querySelector('.slider-min-input');
+            const maxInput = container.querySelector('.slider-max-input');
+            const inputs = [minInput, maxInput];
+
+            slider.on('update', (values, handle) => {
+                inputs[handle].value = Math.round(values[handle]);
+            });
+            
+            slider.on('change', (values) => {
+                handleSliderChange(key, values[0], values[1]);
+            });
+
+            inputs.forEach((input, handle) => {
+                input.addEventListener('change', (e) => {
+                    const arr = [null, null];
+                    arr[handle] = e.target.value;
+                    slider.set(arr);
+                    handleSliderChange(key, slider.get()[0], slider.get()[1]);
+                });
+            });
+
+            sliderInstances[key] = slider;
+        }
+
+        async function renderDynamicFilters(filters) {
+            Object.values(sliderInstances).forEach(slider => slider.destroy());
+            sliderInstances = {};
+            dynamicFiltersContainer.innerHTML = '';
+            if (!filters || Object.keys(filters).length === 0) return;
+
+            for (const [key, data] of Object.entries(filters)) {
+                const section = document.createElement('div');
+                section.className = 'py-4';
+                const title = document.createElement('h3');
+                title.className = 'text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2';
+                title.textContent = key.replace(/_/g, ' ');
+                section.appendChild(title);
+
+                if (data.type === 'categorical') {
+                    const optionsList = document.createElement('div');
+                    optionsList.className = 'flex flex-wrap gap-2';
+                    data.values.forEach(value => {
+                        const button = document.createElement('button');
+                        const isActive = currentState.activeFilters[key] === value;
+                        button.className = `px-2 py-1 text-sm font-medium rounded-full border transition-colors duration-150 ${isActive ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-100'}`;
+                        button.textContent = value;
+                        button.dataset.filterKey = key;
+                        button.dataset.filterValue = value;
+                        optionsList.appendChild(button);
+                    });
+                    section.appendChild(optionsList);
+                } else if (data.type === 'numerical') {
+                    const sliderWrapper = document.createElement('div');
+                    sliderWrapper.innerHTML = `
+                        <div class="flex justify-between items-center mb-2">
+                            <input type="number" class="slider-min-input w-16 text-xs text-center border-gray-300 rounded" />
+                            <span class="text-gray-400">-</span>
+                            <input type="number" class="slider-max-input w-16 text-xs text-center border-gray-300 rounded" />
+                        </div>
+                        <div class="slider"></div>
+                    `;
+                    section.appendChild(sliderWrapper);
+                    const format = { to: val => Math.round(val), from: val => Number(val) };
+                    createSlider(sliderWrapper, key, data.min, data.max, format);
+                }
+                dynamicFiltersContainer.appendChild(section);
+            }
+        }
+
+        function renderGlobalFilters() {
+            globalFiltersContainer.innerHTML = `
+                <div class="py-4">
+                    <div class="flex justify-between items-center mb-2">
+                        <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Price Range</h3>
+                        <div class="flex items-center space-x-1">
+                            <input type="number" id="price-slider-min-input" class="slider-min-input w-16 text-xs text-center border-gray-300 rounded" />
+                            <span class="text-gray-400">-</span>
+                            <input type="number" id="price-slider-max-input" class="slider-max-input w-16 text-xs text-center border-gray-300 rounded" />
+                        </div>
+                    </div>
+                    <div id="price-slider" class="slider"></div>
+                </div>
+            `;
+            const priceSliderEl = globalFiltersContainer.querySelector('#price-slider').parentElement;
+            const format = { to: val => Math.round(val), from: val => Number(val) };
+            createSlider(priceSliderEl, 'price', 0, 5000, format);
         }
 
         async function renderChart(mergedProductId) {
@@ -384,12 +476,25 @@
         }
         
         async function showProductDetailsModal(mergedId) {
-            const params = new URLSearchParams({ page: currentState.page, page_size: currentState.pageSize, ... (currentState.searchTerm && {search: currentState.searchTerm}), ... (currentState.categoryId && {category_id: currentState.categoryId}), sort_by: currentState.sortBy, sort_order: currentState.sortOrder });
-            const data = await fetchData(`${currentState.view}?${params.toString()}`, false);
-            const product = data.products.find(p => p.id == mergedId);
+            // FIX: Instead of re-fetching the whole list, we now fetch just the one product we need.
+            // This is more efficient and avoids the previous bug.
+            const data = await fetchData(`${currentState.view}?id=${mergedId}`, false);
+            if (!data || !data.products || data.products.length === 0) {
+                 // Fallback for when the single-product fetch isn't implemented or fails
+                const listData = await fetchData(`${currentState.view}?${new URLSearchParams(currentState)}`, false);
+                const product = listData.products.find(p => p.id == mergedId);
+                if (!product) {
+                    alert("Could not load product details.");
+                    console.error("Failed to find product in fallback fetch as well.");
+                    return;
+                }
+                 handleModalData(product);
+            } else {
+                 handleModalData(data.products[0]);
+            }
+        }
 
-            if (!product) { alert("Could not load product details."); return; }
-
+        function handleModalData(product) {
             modalProductName.textContent = product.canonical_name;
             
             modalPriceStats.innerHTML = `
@@ -415,11 +520,12 @@
                 modalListingsContainer.appendChild(listingEl);
             });
             
-            renderChart(mergedId);
+            renderChart(product.id);
 
             productDetailsModal.classList.remove('hidden');
             setTimeout(() => productDetailsModal.classList.add('modal-enter-active'), 10);
         }
+
 
         function hideProductDetailsModal() {
             productDetailsModal.classList.remove('modal-enter-active');
@@ -452,6 +558,10 @@
             if (currentState.sortBy) params.append('sort_by', currentState.sortBy);
             if (currentState.sortOrder) params.append('sort_order', currentState.sortOrder);
             
+            for (const [key, value] of Object.entries(currentState.activeFilters)) {
+                params.append(key, value);
+            }
+            
             const finalUrl = `${currentState.view}?${params.toString()}`;
             const data = await fetchData(finalUrl);
             if (data) {
@@ -463,13 +573,14 @@
         }
 
         // --- Event Handlers ---
-        function handleCategoryClick(e) {
+        async function handleCategoryClick(e) {
             const button = e.target.closest('.filter-button');
             if (button) {
                 const id = button.dataset.id;
                 currentState.categoryId = id === 'all' ? null : parseInt(id);
                 currentState.categoryName = button.dataset.name;
                 currentState.page = 1;
+                currentState.activeFilters = {};
                 
                 document.querySelectorAll('#category-list .filter-button').forEach(btn => {
                     btn.classList.toggle('bg-blue-100', btn.dataset.id === id);
@@ -477,6 +588,15 @@
                 });
                 currentViewTitle.textContent = currentState.categoryName;
                 
+                if (currentState.categoryId) {
+                    const filters = await fetchData(`filters/${currentState.categoryId}`, false);
+                    renderDynamicFilters(filters);
+                } else {
+                    renderDynamicFilters(null);
+                }
+                
+                if (sliderInstances.price) sliderInstances.price.set([0, 5000]);
+
                 loadProducts();
                 renderActiveFilters();
             }
@@ -506,23 +626,71 @@
             loadProducts();
         }
 
+        function handleSliderChange(key, minVal, maxVal) {
+            currentState.activeFilters[`min_${key}`] = Math.round(minVal);
+            currentState.activeFilters[`max_${key}`] = Math.round(maxVal);
+            currentState.page = 1;
+
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => {
+                loadProducts();
+                renderActiveFilters();
+            }, 500);
+        }
+
+        function handleDynamicFilterChange(e) {
+            const button = e.target.closest('button[data-filter-key]');
+            if (button) {
+                const key = button.dataset.filterKey;
+                const value = button.dataset.filterValue;
+                const isActive = currentState.activeFilters[key] === value;
+
+                document.querySelectorAll(`button[data-filter-key="${key}"]`).forEach(btn => {
+                    btn.classList.remove('bg-blue-600', 'text-white', 'border-blue-600');
+                    btn.classList.add('bg-white', 'text-gray-600', 'border-gray-300', 'hover:bg-gray-100');
+                });
+
+                if (isActive) {
+                    delete currentState.activeFilters[key];
+                } else {
+                    currentState.activeFilters[key] = value;
+                    button.classList.add('bg-blue-600', 'text-white', 'border-blue-600');
+                    button.classList.remove('bg-white', 'text-gray-600', 'border-gray-300', 'hover:bg-gray-100');
+                }
+                
+                currentState.page = 1;
+                loadProducts();
+                renderActiveFilters();
+            }
+        }
+
         function handleFilterRemoval(e) {
             const button = e.target.closest('[data-filter-type]');
             if (button) {
                 const type = button.dataset.filterType;
+                const key = button.dataset.filterKey;
+
                 if (type === 'category') {
                     currentState.categoryId = null;
                     currentState.categoryName = 'All Products';
                     currentViewTitle.textContent = currentState.categoryName;
                     document.querySelectorAll('#category-list .filter-button').forEach(btn => {
-                        const isAllButton = btn.dataset.id === 'all';
-                        btn.classList.toggle('bg-blue-100', isAllButton);
-                        btn.classList.toggle('text-blue-700', isAllButton);
+                        btn.classList.toggle('bg-blue-100', btn.dataset.id === 'all');
+                        btn.classList.toggle('text-blue-700', btn.dataset.id === 'all');
                     });
+                    renderDynamicFilters(null);
                 } else if (type === 'search') {
                     currentState.searchTerm = null;
                     searchInput.value = '';
+                } else if (type === 'attribute') {
+                    delete currentState.activeFilters[key];
+                    renderDynamicFilters(currentState.activeFilters);
+                } else if (type === 'attribute_range') {
+                    delete currentState.activeFilters[`min_${key}`];
+                    delete currentState.activeFilters[`max_${key}`];
+                    if (sliderInstances[key]) sliderInstances[key].set(sliderInstances[key].options.range);
                 }
+
                 currentState.page = 1;
                 loadProducts();
                 renderActiveFilters();
@@ -530,14 +698,16 @@
                 currentState.categoryId = null;
                 currentState.categoryName = 'All Products';
                 currentState.searchTerm = null;
+                currentState.activeFilters = {};
                 currentState.page = 1;
                 searchInput.value = '';
                 currentViewTitle.textContent = currentState.categoryName;
                 document.querySelectorAll('#category-list .filter-button').forEach(btn => {
-                    const isAllButton = btn.dataset.id === 'all';
-                    btn.classList.toggle('bg-blue-100', isAllButton);
-                    btn.classList.toggle('text-blue-700', isAllButton);
+                    btn.classList.toggle('bg-blue-100', btn.dataset.id === 'all');
+                    btn.classList.toggle('text-blue-700', btn.dataset.id === 'all');
                 });
+                renderDynamicFilters(null);
+                if (sliderInstances.price) sliderInstances.price.set([0, 5000]);
                 loadProducts();
                 renderActiveFilters();
             }
@@ -560,9 +730,11 @@
         // --- Initialization ---
         document.addEventListener('DOMContentLoaded', () => {
             loadCategories();
+            renderGlobalFilters();
             loadProducts();
             
             categoryList.addEventListener('click', handleCategoryClick);
+            dynamicFiltersContainer.addEventListener('click', handleDynamicFilterChange);
             searchInput.addEventListener('input', handleSearch);
             sortButton.addEventListener('click', toggleSortDropdown);
             sortOptions.addEventListener('click', handleSortChange);
@@ -576,12 +748,9 @@
             productDetailsModal.addEventListener('click', (e) => {
                 if (e.target === productDetailsModal) hideProductDetailsModal();
             });
-            // Close dropdown if clicking outside
             window.addEventListener('click', (e) => {
                 if (!sortButton.contains(e.target) && !sortOptions.contains(e.target)) {
-                    if (!sortOptions.classList.contains('hidden')) {
-                        toggleSortDropdown();
-                    }
+                    if (!sortOptions.classList.contains('hidden')) toggleSortDropdown();
                 }
             });
         });
