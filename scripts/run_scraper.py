@@ -11,8 +11,9 @@ from backend.app.config import settings
 from scripts.init_database import setup_database
 from backend.app.dependencies import SessionLocal
 from backend.app.database import ScrapeLog
-# Import the function from our new merge script
 from scripts.merge_products import group_products_by_model
+# Import the cache clearing utility
+from backend.app.redis_client import clear_all_cache
 
 # Import the individual scraper runner functions
 from backend.app.scrapers.pccg_scraper import run_pccg_scraper
@@ -40,8 +41,8 @@ ALL_SCRAPERS = [
 
 def main():
     """
-    Initializes the database, runs all scrapers, and then runs the
-    product merging script.
+    Initializes the database, runs all scrapers, merges products,
+    and finally clears the cache.
     """
     # --- Step 1: Initialize the database ---
     print("--- Initializing Database ---")
@@ -60,11 +61,7 @@ def main():
             future_to_scraper = {}
             for scraper_func in ALL_SCRAPERS:
                 scraper_name = scraper_func.__name__
-                # Log the start of the scraper
-                start_log = ScrapeLog(
-                    status="STARTED",
-                    details=f"Starting scraper: {scraper_name}"
-                )
+                start_log = ScrapeLog(status="STARTED", details=f"Starting scraper: {scraper_name}")
                 db_session.add(start_log)
                 db_session.commit()
 
@@ -87,7 +84,6 @@ def main():
                     details = f"{scraper_name} failed with exception: {exc}"
                     print(f"\n--- {scraper_name} Generated an Exception: {exc} ---")
 
-                # Log the final status
                 end_log = ScrapeLog(status=status, details=details)
                 db_session.add(end_log)
                 db_session.commit()
@@ -95,7 +91,6 @@ def main():
     except KeyboardInterrupt:
         print("\n\nKeyboard interrupt received. Signaling scrapers to shut down...")
         shutdown_event.set()
-        # Log the shutdown
         shutdown_log = ScrapeLog(status="SHUTDOWN", details="Scraping process terminated by user.")
         db_session.add(shutdown_log)
         db_session.commit()
@@ -104,9 +99,11 @@ def main():
         db_session.close()
         print("\n--- All Scrapers Have Completed Their Execution ---")
     
-    # --- Step 2: Run the product merging script after all scrapers are done ---
     if not shutdown_event.is_set():
+        # --- Step 2: Run the product merging script ---
         group_products_by_model()
+        # --- Step 3: Clear the cache to reflect the new data ---
+        clear_all_cache()
 
 
 if __name__ == "__main__":

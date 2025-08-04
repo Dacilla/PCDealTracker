@@ -239,6 +239,9 @@
 
         // --- Rendering Functions ---
         function renderProducts(products) {
+            // DEBUG: Log the raw data received by this function
+            console.log("Data received by renderProducts:", products);
+
             productGrid.innerHTML = '';
             if (!products || products.length === 0) {
                 productGrid.innerHTML = `<p class="col-span-full text-center text-gray-500">No products found.</p>`;
@@ -266,7 +269,7 @@
                 }
 
                 const bestRetailer = product.best_price_retailer || 'Unavailable';
-                const imageUrl = product.listings.length > 0 && product.listings[0].image_url ? product.listings[0].image_url : 'https://placehold.co/400x400/F0F0F0/AAAAAA?text=No+Image';
+                const imageUrl = product.listings && product.listings.length > 0 && product.listings[0].image_url ? product.listings[0].image_url : 'https://placehold.co/400x400/F0F0F0/AAAAAA?text=No+Image';
 
                 card.innerHTML = `
                     <div class="relative p-4">

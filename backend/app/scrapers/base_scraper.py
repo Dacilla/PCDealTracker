@@ -2,6 +2,7 @@ import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException
 from bs4 import BeautifulSoup
 from sqlalchemy.orm import Session
 from sqlalchemy import select, func, and_, update
@@ -10,7 +11,6 @@ import datetime
 import threading
 
 from ..database import Product, PriceHistory, ProductStatus, Category
-# Import the new parsing utility
 from ..utils.parsing import parse_product_name
 
 # A lock to prevent race conditions during driver initialization
@@ -46,7 +46,7 @@ class BaseScraper:
     def get_page_content(self, url: str, wait_for_selector: str) -> BeautifulSoup | None:
         """
         Fetches page content, explicitly waiting for a key element to be present.
-        Checks for a shutdown signal before proceeding.
+        If the wait times out, it logs a warning but proceeds with parsing.
         """
         if self.shutdown_event.is_set():
             print("Shutdown signal received, stopping navigation.")
@@ -64,9 +64,12 @@ class BaseScraper:
             wait = WebDriverWait(self.driver, 15)
             wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, wait_for_selector)))
             print("Selector found. Page is ready.")
-
             time.sleep(1)
-            
+            return BeautifulSoup(self.driver.page_source, 'html.parser')
+
+        except TimeoutException:
+            print(f"  -- WARNING: Timed out waiting for '{wait_for_selector}' at {url or self.driver.current_url}.")
+            print("  -- Proceeding to parse the page content that has loaded so far.")
             return BeautifulSoup(self.driver.page_source, 'html.parser')
 
         except Exception as e:
@@ -101,7 +104,6 @@ class BaseScraper:
         self.scraped_product_urls.add(product_url)
         session = self.db_session
         
-        # --- Data Enrichment Step ---
         product_name = product_data.get("name", "")
         enriched_data = parse_product_name(product_name)
         
@@ -113,7 +115,6 @@ class BaseScraper:
             product = existing_product
             price_changed = product.current_price != product_data.get("price")
             
-            # Update product details, now including enriched data
             product.name = product_name
             product.brand = enriched_data.get("brand")
             product.model = enriched_data.get("model")
@@ -126,7 +127,6 @@ class BaseScraper:
                 print(f"  Price changed for {product.name}. New price: ${product.current_price}")
                 session.add(PriceHistory(product_id=product.id, price=product.current_price))
                 
-                # --- Advanced Deal Detection ---
                 is_deal = False
                 deal_reasons = []
 

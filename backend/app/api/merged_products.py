@@ -8,6 +8,7 @@ from sqlalchemy import select, func, asc, desc, cast, Float, and_
 from ..dependencies import get_db
 from ..database import MergedProduct, Product, PriceHistory, ProductStatus, merged_product_association
 from .products import ProductSchema, CategorySchema, RetailerSchema
+from ..redis_client import get_cache, set_cache
 
 # --- Pydantic Schemas ---
 
@@ -51,9 +52,11 @@ router = APIRouter(
     responses={404: {"description": "Not found"}},
 )
 
-def _process_merged_product(mp: MergedProduct, db: Session) -> MergedProductSchema:
-    """Helper function to process a single MergedProduct object."""
+def _process_merged_product(mp: MergedProduct, db: Session) -> dict:
+    """Helper function to process a single MergedProduct object and return a dict."""
     merged_schema = MergedProductSchema.model_validate(mp)
+    
+    merged_schema.listings = [ProductSchema.model_validate(p) for p in mp.products]
     
     available_listings = [p for p in mp.products if p.current_price is not None and p.status == ProductStatus.AVAILABLE]
     if available_listings:
@@ -84,8 +87,8 @@ def _process_merged_product(mp: MergedProduct, db: Session) -> MergedProductSche
                 merged_schema.all_time_low_date = all_time_low_entry.date
                 merged_schema.all_time_low_retailer_name = all_time_low_entry.product.retailer.name
     
-    merged_schema.listings = [ProductSchema.model_validate(p) for p in mp.products]
-    return merged_schema
+    return merged_schema.model_dump(mode='json')
+
 
 @router.get("/", response_model=MergedProductPage)
 def read_merged_products(
@@ -100,71 +103,54 @@ def read_merged_products(
     sort_order: Optional[str] = Query("asc"),
     min_price: Optional[float] = Query(None),
     max_price: Optional[float] = Query(None),
-    hide_unavailable: bool = Query(False), # New parameter
+    hide_unavailable: bool = Query(False),
 ):
     """
-    Retrieve a paginated list of merged products with dynamic attribute and range filtering.
+    Retrieve a paginated list of merged products with caching.
     """
+    cache_key = f"merged_products:{str(request.query_params)}"
+    cached_result = get_cache(cache_key)
+    if cached_result:
+        print(f"--- Serving merged products from cache: {cache_key} ---")
+        return cached_result
+
+    print(f"--- Fetching merged products from DB: {cache_key} ---")
+    
     min_price_subquery = (
-        select(
-            merged_product_association.c.merged_product_id,
-            func.min(Product.current_price).label("min_price"),
-        )
+        select(merged_product_association.c.merged_product_id, func.min(Product.current_price).label("min_price"))
         .join(Product, merged_product_association.c.product_id == Product.id)
         .where(Product.status == ProductStatus.AVAILABLE)
-        .group_by(merged_product_association.c.merged_product_id)
-        .subquery()
+        .group_by(merged_product_association.c.merged_product_id).subquery()
     )
     
-    # If hiding unavailable, we must have a match in the min_price_subquery (INNER JOIN)
-    # Otherwise, we can include products with no available listings (LEFT JOIN)
     is_outer_join = not hide_unavailable
-
     query = (
         select(MergedProduct)
         .join(min_price_subquery, MergedProduct.id == min_price_subquery.c.merged_product_id, isouter=is_outer_join)
-        .options(
-            joinedload(MergedProduct.category),
-            selectinload(MergedProduct.products).joinedload(Product.retailer)
-        )
+        .options(joinedload(MergedProduct.category), selectinload(MergedProduct.products).joinedload(Product.retailer))
     )
     
     filters = []
     if search:
-        if search_mode == "strict":
-            filters.append(MergedProduct.canonical_name.ilike(f"%{search}%"))
-        else:
-            search_terms = search.split()
-            search_conditions = [MergedProduct.canonical_name.ilike(f"%{term}%") for term in search_terms]
-            filters.append(and_(*search_conditions))
+        search_terms = search.split()
+        search_conditions = [MergedProduct.canonical_name.ilike(f"%{term}%") for term in search_terms]
+        filters.append(and_(*search_conditions) if search_mode == "loose" else MergedProduct.canonical_name.ilike(f"%{search}%"))
 
     if category_id: filters.append(MergedProduct.category_id == category_id)
     if min_price is not None: filters.append(min_price_subquery.c.min_price >= min_price)
     if max_price is not None: filters.append(min_price_subquery.c.min_price <= max_price)
 
     known_params = ['page', 'page_size', 'search', 'search_mode', 'category_id', 'sort_by', 'sort_order', 'min_price', 'max_price', 'hide_unavailable']
-    query_params = request.query_params
-    
-    for key in query_params.keys():
-        if key not in known_params:
-            if key.startswith("min_"):
-                attr_key = key[4:]
-                value = query_params.get(key)
-                filters.append(cast(MergedProduct.attributes[attr_key], Float) >= float(value))
-            elif key.startswith("max_"):
-                attr_key = key[4:]
-                value = query_params.get(key)
-                filters.append(cast(MergedProduct.attributes[attr_key], Float) <= float(value))
-            else:
-                value = query_params.get(key)
-                filters.append(MergedProduct.attributes[key].as_string() == value)
+    for key, value in request.query_params.items():
+        if key not in known_params and value:
+            if key.startswith("min_"): filters.append(cast(MergedProduct.attributes[key[4:]], Float) >= float(value))
+            elif key.startswith("max_"): filters.append(cast(MergedProduct.attributes[key[4:]], Float) <= float(value))
+            else: filters.append(MergedProduct.attributes[key].as_string() == value)
 
     if filters:
         query = query.where(*filters)
 
-    count_query = select(func.count(MergedProduct.id.distinct())).join(
-        min_price_subquery, MergedProduct.id == min_price_subquery.c.merged_product_id, isouter=is_outer_join
-    ).where(*filters)
+    count_query = select(func.count(MergedProduct.id.distinct())).join(min_price_subquery, MergedProduct.id == min_price_subquery.c.merged_product_id, isouter=is_outer_join).where(*filters)
     total = db.execute(count_query).scalar_one()
 
     # --- Sorting Logic ---
@@ -187,6 +173,7 @@ def read_merged_products(
             MergedProduct.id == most_recent_date_subquery.c.merged_product_id,
             isouter=True
         )
+        # FIX: Correctly reference the subquery defined for this sorting option
         order_column = desc(most_recent_date_subquery.c.max_date)
         query = query.order_by(order_column.nulls_last())
     elif sort_by == "discount" or sort_by == "discount_amount":
@@ -223,28 +210,34 @@ def read_merged_products(
     results = db.execute(query.offset(skip).limit(page_size)).scalars().unique().all()
 
     processed_results = [_process_merged_product(mp, db) for mp in results]
-
-    return {"total": total, "products": processed_results}
+    
+    final_response = {"total": total, "products": processed_results}
+    set_cache(cache_key, final_response, expiry_seconds=900) # Cache for 15 minutes
+    return final_response
 
 @router.get("/{merged_product_id}", response_model=MergedProductSchema)
 def read_single_merged_product(merged_product_id: int, db: Session = Depends(get_db)):
-    """
-    Retrieve a single merged product by its ID.
-    """
+    cache_key = f"merged_product:{merged_product_id}"
+    cached_product = get_cache(cache_key)
+    if cached_product:
+        print(f"--- Serving single product from cache: {cache_key} ---")
+        return cached_product
+
+    print(f"--- Fetching single product from DB: {cache_key} ---")
     query = (
         select(MergedProduct)
-        .options(
-            joinedload(MergedProduct.category),
-            selectinload(MergedProduct.products).joinedload(Product.retailer)
-        )
+        .options(joinedload(MergedProduct.category), selectinload(MergedProduct.products).joinedload(Product.retailer))
         .where(MergedProduct.id == merged_product_id)
     )
     result = db.execute(query).scalars().unique().first()
     if not result:
         raise HTTPException(status_code=404, detail="Merged product not found")
     
-    return _process_merged_product(result, db)
+    processed_product = _process_merged_product(result, db)
+    set_cache(cache_key, processed_product, expiry_seconds=900)
+    return processed_product
 
+# (The price history endpoint remains the same)
 @router.get("/{merged_product_id}/price-history", response_model=List[PriceHistoryWithRetailerSchema])
 def get_combined_price_history(merged_product_id: int, db: Session = Depends(get_db)):
     merged_product = db.get(MergedProduct, merged_product_id)
