@@ -94,12 +94,13 @@ def read_merged_products(
     page: int = 1,
     page_size: int = 50,
     search: Optional[str] = Query(None),
-    search_mode: Optional[str] = Query("loose"), # New search mode parameter
+    search_mode: Optional[str] = Query("loose"),
     category_id: Optional[int] = Query(None),
     sort_by: Optional[str] = Query("name"),
     sort_order: Optional[str] = Query("asc"),
     min_price: Optional[float] = Query(None),
     max_price: Optional[float] = Query(None),
+    hide_unavailable: bool = Query(False), # New parameter
 ):
     """
     Retrieve a paginated list of merged products with dynamic attribute and range filtering.
@@ -114,10 +115,14 @@ def read_merged_products(
         .group_by(merged_product_association.c.merged_product_id)
         .subquery()
     )
+    
+    # If hiding unavailable, we must have a match in the min_price_subquery (INNER JOIN)
+    # Otherwise, we can include products with no available listings (LEFT JOIN)
+    is_outer_join = not hide_unavailable
 
     query = (
         select(MergedProduct)
-        .join(min_price_subquery, MergedProduct.id == min_price_subquery.c.merged_product_id, isouter=True)
+        .join(min_price_subquery, MergedProduct.id == min_price_subquery.c.merged_product_id, isouter=is_outer_join)
         .options(
             joinedload(MergedProduct.category),
             selectinload(MergedProduct.products).joinedload(Product.retailer)
@@ -128,7 +133,7 @@ def read_merged_products(
     if search:
         if search_mode == "strict":
             filters.append(MergedProduct.canonical_name.ilike(f"%{search}%"))
-        else: # Default to loose search
+        else:
             search_terms = search.split()
             search_conditions = [MergedProduct.canonical_name.ilike(f"%{term}%") for term in search_terms]
             filters.append(and_(*search_conditions))
@@ -137,7 +142,7 @@ def read_merged_products(
     if min_price is not None: filters.append(min_price_subquery.c.min_price >= min_price)
     if max_price is not None: filters.append(min_price_subquery.c.min_price <= max_price)
 
-    known_params = ['page', 'page_size', 'search', 'search_mode', 'category_id', 'sort_by', 'sort_order', 'min_price', 'max_price']
+    known_params = ['page', 'page_size', 'search', 'search_mode', 'category_id', 'sort_by', 'sort_order', 'min_price', 'max_price', 'hide_unavailable']
     query_params = request.query_params
     
     for key in query_params.keys():
@@ -158,7 +163,7 @@ def read_merged_products(
         query = query.where(*filters)
 
     count_query = select(func.count(MergedProduct.id.distinct())).join(
-        min_price_subquery, MergedProduct.id == min_price_subquery.c.merged_product_id, isouter=True
+        min_price_subquery, MergedProduct.id == min_price_subquery.c.merged_product_id, isouter=is_outer_join
     ).where(*filters)
     total = db.execute(count_query).scalar_one()
 

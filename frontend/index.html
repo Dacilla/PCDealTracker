@@ -198,7 +198,8 @@
             searchMode: 'loose',
             sortBy: 'name',
             sortOrder: 'asc',
-            activeFilters: {}, // For dynamic filters like { socket: 'AM5', min_vram: 8 }
+            activeFilters: {}, 
+            hideUnavailable: false,
             page: 1,
             pageSize: 50,
             totalProducts: 0
@@ -486,6 +487,13 @@
                     </div>
                     <div id="price-slider" class="slider"></div>
                 </div>
+                <div class="py-4 border-t">
+                    <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Options</h3>
+                    <label class="flex items-center text-sm font-medium text-gray-700">
+                        <input type="checkbox" id="hide-unavailable-checkbox" class="h-4 w-4 border-gray-300 rounded text-blue-600 focus:ring-blue-500">
+                        <span class="ml-2">Hide Unavailable Products</span>
+                    </label>
+                </div>
             `;
             const priceSliderEl = globalFiltersContainer.querySelector('#price-slider').parentElement;
             const format = { to: val => Math.round(val), from: val => Number(val) };
@@ -596,6 +604,7 @@
             if (currentState.categoryId) params.append('category_id', currentState.categoryId);
             if (currentState.sortBy) params.append('sort_by', currentState.sortBy);
             if (currentState.sortOrder) params.append('sort_order', currentState.sortOrder);
+            if (currentState.hideUnavailable) params.append('hide_unavailable', true);
             
             for (const [key, value] of Object.entries(currentState.activeFilters)) {
                 params.append(key, value);
@@ -810,6 +819,13 @@
             sortOptions.addEventListener('click', handleSortChange);
             activeFiltersContainer.addEventListener('click', handleFilterRemoval);
             
+            const hideUnavailableCheckbox = document.getElementById('hide-unavailable-checkbox');
+            hideUnavailableCheckbox.addEventListener('change', (e) => {
+                currentState.hideUnavailable = e.target.checked;
+                currentState.page = 1;
+                loadProducts();
+            });
+
             productGrid.addEventListener('click', (e) => {
                 const card = e.target.closest('.product-card');
                 if (card) showProductDetailsModal(card.dataset.mergedId);
