@@ -40,6 +40,10 @@
             <div class="p-6">
                 <h1 class="text-2xl font-bold text-gray-800">PC Deal Tracker</h1>
             </div>
+            <nav id="view-switcher" class="px-4 mt-4">
+                 <button data-view="products" class="view-button w-full text-left py-2 px-4 rounded-md text-sm font-medium bg-blue-100 text-blue-700">Products</button>
+                 <button data-view="trends" class="view-button w-full text-left py-2 px-4 rounded-md text-sm font-medium text-gray-600 hover:bg-gray-200">Trends</button>
+            </nav>
             <nav id="category-nav" class="mt-4 px-4 flex-1 overflow-y-auto">
                 <h2 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Categories</h2>
                 <ul id="category-list" class="space-y-1">
@@ -53,7 +57,7 @@
 
         <!-- Main Content -->
         <main class="flex-1 flex flex-col overflow-hidden">
-            <header class="bg-white shadow-sm p-4">
+            <header id="main-header" class="bg-white shadow-sm p-4">
                 <div class="flex items-center justify-between space-x-4">
                     <h2 id="current-view-title" class="text-xl font-semibold text-gray-700">All Products</h2>
                      <div class="flex-1 max-w-md flex items-center space-x-2">
@@ -113,18 +117,26 @@
                 <div id="active-filters-container" class="pt-3 flex items-center space-x-2 text-sm flex-wrap gap-2"></div>
             </header>
 
-            <!-- Product Grid -->
-            <div id="product-grid-container" class="flex-1 overflow-y-auto p-6">
+            <!-- Content Area -->
+            <div id="content-area" class="flex-1 overflow-y-auto p-6">
                 <div id="loading-spinner" class="hidden text-center py-10">
                     <svg class="animate-spin h-8 w-8 text-blue-500 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                    <p class="mt-2 text-gray-600">Loading Products...</p>
+                    <p class="mt-2 text-gray-600">Loading...</p>
                 </div>
+                <!-- Trends Header -->
+                <div id="trends-header" class="hidden mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                    <h2 class="text-xl font-bold text-blue-800">Biggest Price Drops</h2>
+                    <p class="mt-1 text-sm text-blue-700">This view shows the top 20 products with the largest percentage-based price drop over the last 7 days, based on their recorded price history.</p>
+                </div>
+                <!-- Product Grid -->
                 <div id="product-grid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6"></div>
+                <!-- Trends List -->
+                <div id="trends-list" class="hidden space-y-4"></div>
                  <div id="error-message" class="hidden text-center py-10">
-                    <p class="text-red-500">Failed to load products. Please make sure the backend is running and try again.</p>
+                    <p class="text-red-500">Failed to load data. Please make sure the backend is running and try again.</p>
                 </div>
             </div>
-            <footer class="bg-white p-2 border-t flex items-center justify-center">
+            <footer id="pagination-footer" class="bg-white p-2 border-t flex items-center justify-center">
                 <div id="pagination-controls" class="flex items-center space-x-2"></div>
             </footer>
         </main>
@@ -165,10 +177,17 @@
         const API_BASE_URL = 'http://127.0.0.1:8000/api/v1';
 
         // --- DOM Elements ---
+        const viewSwitcher = document.getElementById('view-switcher');
+        const categoryNav = document.getElementById('category-nav');
+        const mainHeader = document.getElementById('main-header');
+        const paginationFooter = document.getElementById('pagination-footer');
+        const contentArea = document.getElementById('content-area');
+        const trendsHeader = document.getElementById('trends-header');
         const categoryList = document.getElementById('category-list');
         const globalFiltersContainer = document.getElementById('global-filters-container');
         const dynamicFiltersContainer = document.getElementById('dynamic-filters-container');
         const productGrid = document.getElementById('product-grid');
+        const trendsList = document.getElementById('trends-list');
         const productCount = document.getElementById('product-count');
         const loadingSpinner = document.getElementById('loading-spinner');
         const errorMessage = document.getElementById('error-message');
@@ -191,7 +210,7 @@
 
         // --- State Management ---
         let currentState = {
-            view: 'merged-products',
+            view: 'products', // 'products' or 'trends'
             categoryId: null,
             categoryName: 'All Products',
             searchTerm: null,
@@ -206,7 +225,7 @@
         };
         let priceChart = null;
         let debounceTimer;
-        let sliderInstances = {}; // To hold noUiSlider instances
+        let sliderInstances = {};
 
         // --- Utility Functions ---
         function getRetailerColor(retailerName) {
@@ -222,7 +241,9 @@
             if (showLoading) {
                 loadingSpinner.classList.remove('hidden');
                 errorMessage.classList.add('hidden');
-                productGrid.innerHTML = '';
+                productGrid.classList.add('hidden');
+                trendsList.classList.add('hidden');
+                trendsHeader.classList.add('hidden');
             }
             try {
                 const response = await fetch(`${API_BASE_URL}/${endpoint}`);
@@ -239,9 +260,6 @@
 
         // --- Rendering Functions ---
         function renderProducts(products) {
-            // DEBUG: Log the raw data received by this function
-            console.log("Data received by renderProducts:", products);
-
             productGrid.innerHTML = '';
             if (!products || products.length === 0) {
                 productGrid.innerHTML = `<p class="col-span-full text-center text-gray-500">No products found.</p>`;
@@ -269,7 +287,7 @@
                 }
 
                 const bestRetailer = product.best_price_retailer || 'Unavailable';
-                const imageUrl = product.listings && product.listings.length > 0 && product.listings[0].image_url ? product.listings[0].image_url : 'https://placehold.co/400x400/F0F0F0/AAAAAA?text=No+Image';
+                const imageUrl = product.listings.length > 0 && product.listings[0].image_url ? product.listings[0].image_url : 'https://placehold.co/400x400/F0F0F0/AAAAAA?text=No+Image';
 
                 card.innerHTML = `
                     <div class="relative p-4">
@@ -293,6 +311,37 @@
             });
         }
         
+        function renderTrends(trends) {
+            trendsList.innerHTML = '';
+            if (!trends || trends.length === 0) {
+                trendsList.innerHTML = `<p class="text-center text-gray-500">No significant price drops in the last 7 days.</p>`;
+                return;
+            }
+            trends.forEach(item => {
+                const product = item.product;
+                const imageUrl = product.listings.length > 0 && product.listings[0].image_url ? product.listings[0].image_url : 'https://placehold.co/400x400/F0F0F0/AAAAAA?text=No+Image';
+                const trendEl = document.createElement('div');
+                trendEl.className = 'product-card bg-white rounded-lg shadow-md overflow-hidden flex items-center p-4 space-x-4 cursor-pointer hover:shadow-lg transition-shadow';
+                trendEl.dataset.mergedId = product.id;
+
+                trendEl.innerHTML = `
+                    <img src="${imageUrl}" class="w-24 h-24 object-contain flex-shrink-0" onerror="this.src='https://placehold.co/400x400/F0F0F0/AAAAAA?text=No+Image'">
+                    <div class="flex-grow">
+                        <h3 class="font-semibold text-gray-800">${product.canonical_name}</h3>
+                        <p class="text-sm text-gray-500">${product.category.name}</p>
+                    </div>
+                    <div class="flex-shrink-0 text-right">
+                        <p class="text-xl font-bold text-red-600">$${item.latest_price.toFixed(2)}</p>
+                        <p class="text-sm text-gray-500 line-through">$${item.initial_price.toFixed(2)}</p>
+                        <p class="text-sm font-semibold text-green-600">
+                            -${item.price_drop_percentage.toFixed(1)}% (-$${item.price_drop_amount.toFixed(2)})
+                        </p>
+                    </div>
+                `;
+                trendsList.appendChild(trendEl);
+            });
+        }
+
         function renderPagination() {
             const totalPages = Math.ceil(currentState.totalProducts / currentState.pageSize);
             paginationControls.innerHTML = '';
@@ -304,7 +353,7 @@
                 button.className = `px-3 py-1 rounded-md text-sm ${page === currentState.page ? 'bg-blue-500 text-white' : 'text-blue-600 hover:bg-blue-100'}`;
                 button.addEventListener('click', () => {
                     currentState.page = page;
-                    loadProducts();
+                    loadContent();
                 });
                 return button;
             };
@@ -323,7 +372,7 @@
                 button.className = `px-3 py-1 rounded-md text-sm ${isDisabled ? 'text-gray-400 cursor-not-allowed' : 'text-blue-600 hover:bg-blue-100'}`;
                 if (!isDisabled) button.addEventListener('click', () => {
                     currentState.page = page;
-                    loadProducts();
+                    loadContent();
                 });
                 return button;
             };
@@ -534,7 +583,7 @@
         }
         
         async function showProductDetailsModal(mergedId) {
-            const product = await fetchData(`${currentState.view}/${mergedId}`, false);
+            const product = await fetchData(`merged-products/${mergedId}`, false);
             if (!product) {
                 alert("Could not load product details.");
                 console.error("Failed to fetch single product with ID:", mergedId);
@@ -598,6 +647,14 @@
             }
         }
         
+        async function loadContent() {
+            if (currentState.view === 'products') {
+                await loadProducts();
+            } else if (currentState.view === 'trends') {
+                await loadTrends();
+            }
+        }
+
         async function loadProducts() {
             const params = new URLSearchParams();
             params.append('page', currentState.page);
@@ -613,17 +670,53 @@
                 params.append(key, value);
             }
             
-            const finalUrl = `${currentState.view}?${params.toString()}`;
+            const finalUrl = `merged-products?${params.toString()}`;
             const data = await fetchData(finalUrl);
             if (data) {
                 currentState.totalProducts = data.total;
                 productCount.textContent = `${data.total} Products`;
+                productGrid.classList.remove('hidden');
                 renderProducts(data.products);
                 renderPagination();
             }
         }
 
+        async function loadTrends() {
+            const data = await fetchData('trends/biggest-drops');
+            if (data) {
+                productCount.textContent = `${data.length} Biggest Drops`;
+                trendsList.classList.remove('hidden');
+                trendsHeader.classList.remove('hidden');
+                renderTrends(data);
+            }
+        }
+
         // --- Event Handlers ---
+        function handleViewChange(e) {
+            const button = e.target.closest('.view-button');
+            if (!button) return;
+            
+            currentState.view = button.dataset.view;
+            document.querySelectorAll('.view-button').forEach(btn => {
+                btn.classList.remove('bg-blue-100', 'text-blue-700');
+                btn.classList.add('text-gray-600', 'hover:bg-gray-200');
+            });
+            button.classList.add('bg-blue-100', 'text-blue-700');
+            
+            if (currentState.view === 'trends') {
+                mainHeader.classList.add('hidden');
+                categoryNav.classList.add('hidden');
+                paginationFooter.classList.add('hidden');
+                trendsHeader.classList.remove('hidden');
+            } else {
+                mainHeader.classList.remove('hidden');
+                categoryNav.classList.remove('hidden');
+                paginationFooter.classList.remove('hidden');
+                trendsHeader.classList.add('hidden');
+            }
+            loadContent();
+        }
+
         async function handleCategoryClick(e) {
             const button = e.target.closest('.filter-button');
             if (button) {
@@ -810,9 +903,10 @@
         document.addEventListener('DOMContentLoaded', () => {
             loadCategories();
             renderGlobalFilters();
-            loadProducts();
+            loadContent();
             updateSearchModeUI();
             
+            viewSwitcher.addEventListener('click', handleViewChange);
             categoryList.addEventListener('click', handleCategoryClick);
             dynamicFiltersContainer.addEventListener('click', handleDynamicFilterChange);
             searchInput.addEventListener('input', handleSearch);
@@ -822,14 +916,7 @@
             sortOptions.addEventListener('click', handleSortChange);
             activeFiltersContainer.addEventListener('click', handleFilterRemoval);
             
-            const hideUnavailableCheckbox = document.getElementById('hide-unavailable-checkbox');
-            hideUnavailableCheckbox.addEventListener('change', (e) => {
-                currentState.hideUnavailable = e.target.checked;
-                currentState.page = 1;
-                loadProducts();
-            });
-
-            productGrid.addEventListener('click', (e) => {
+            contentArea.addEventListener('click', (e) => {
                 const card = e.target.closest('.product-card');
                 if (card) showProductDetailsModal(card.dataset.mergedId);
             });
