@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 # --- Import all API routers ---
-from .api import deals, products, price_history, categories, retailers, merged_products, filters, trends
+from .api import deals, price_history, categories, retailers, merged_products, filters, trends
 from .database import Base
 from .dependencies import engine
 # Import the cache clearing utility
@@ -48,14 +48,14 @@ app.add_middleware(
 )
 
 # --- Include all API routers ---
-app.include_router(products.router)
+# app.include_router(products.router) # FIX: This line is removed as products.py no longer has a router
 app.include_router(deals.router)
 app.include_router(price_history.router)
 app.include_router(categories.router)
 app.include_router(retailers.router)
 app.include_router(merged_products.router)
 app.include_router(filters.router)
-app.include_router(trends.router) # <-- Add the new trends router
+app.include_router(trends.router)
 
 @app.get("/")
 def read_root():

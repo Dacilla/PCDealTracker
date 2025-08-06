@@ -287,12 +287,24 @@
                 }
 
                 const bestRetailer = product.best_price_retailer || 'Unavailable';
+                const bestRetailerListing = product.listings.find(l => l.retailer.name === bestRetailer);
+                let retailerDisplay = `<span class="text-xs font-medium text-gray-600">${bestRetailer}</span>`;
+                if (bestRetailerListing && bestRetailerListing.retailer.logo_url) {
+                    const retailerName = bestRetailerListing.retailer.name;
+                    const logoUrl = bestRetailerListing.retailer.logo_url;
+                    retailerDisplay = `<div class="flex items-center justify-end h-5"><img src="${logoUrl}" class="h-full object-contain" alt="${retailerName}" onerror="this.parentElement.innerHTML = '<span class=\\'text-xs font-medium text-gray-600\\'>${retailerName}</span>'"></div>`;
+                }
+                
+                const listingCount = product.listings.length;
+                const retailerCountBadge = `<span class="absolute top-2 left-2 bg-gray-800 bg-opacity-70 text-white text-xs font-bold px-2 py-1 rounded-full">${listingCount} retailer${listingCount > 1 ? 's' : ''}</span>`;
+
                 const imageUrl = product.listings.length > 0 && product.listings[0].image_url ? product.listings[0].image_url : 'https://placehold.co/400x400/F0F0F0/AAAAAA?text=No+Image';
 
                 card.innerHTML = `
                     <div class="relative p-4">
                         <img src="${imageUrl}" alt="${product.canonical_name}" class="w-full h-48 object-contain" onerror="this.src='https://placehold.co/400x400/F0F0F0/AAAAAA?text=No+Image'">
                         ${discountBadge}
+                        ${retailerCountBadge}
                     </div>
                     <div class="p-4 border-t flex-grow flex flex-col justify-between">
                         <div>
@@ -302,7 +314,7 @@
                            <p class="text-xs text-gray-500">Best Price</p>
                            <div class="flex items-center justify-between">
                                 ${priceDisplay}
-                                <span class="text-xs font-medium text-gray-600">${bestRetailer}</span>
+                                ${retailerDisplay}
                            </div>
                         </div>
                     </div>
@@ -607,9 +619,17 @@
                 listingEl.href = listing.url;
                 listingEl.target = '_blank';
                 listingEl.className = 'block p-3 rounded-md border hover:bg-gray-50';
+                
+                let retailerDisplayInModal = `<span class="font-medium text-gray-700">${listing.retailer.name}</span>`;
+                if (listing.retailer.logo_url) {
+                    const retailerName = listing.retailer.name;
+                    const logoUrl = listing.retailer.logo_url;
+                    retailerDisplayInModal = `<div class="flex items-center h-6"><img src="${logoUrl}" class="h-full object-contain" alt="${retailerName}" onerror="this.parentElement.innerHTML = '<span class=\\'font-medium text-gray-700\\'>${retailerName}</span>'"></div>`;
+                }
+
                 listingEl.innerHTML = `
                     <div class="flex justify-between items-center">
-                        <span class="font-medium text-gray-700">${listing.retailer.name}</span>
+                        ${retailerDisplayInModal}
                         <span class="font-bold text-lg ${listing.on_sale ? 'text-red-500' : 'text-gray-800'}">
                             ${listing.current_price ? '$' + listing.current_price.toFixed(2) : 'N/A'}
                         </span>
