@@ -12,3 +12,4 @@ APScheduler
 redis
 thefuzz
 python-Levenshtein
+pytest

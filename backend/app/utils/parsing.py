@@ -1,7 +1,9 @@
+# backend/app/utils/parsing.py
 import re
+import os
 
 # A list of known PC hardware brands.
-# Sorting by length in descending order helps match longer names first 
+# Sorting by length in descending order helps match longer names first
 # (e.g., "Western Digital" before "WD").
 KNOWN_BRANDS = [
     "AMD", "Intel", "NVIDIA", "Gigabyte", "ASUS", "MSI", "EVGA", "Zotac",
@@ -24,8 +26,14 @@ NORMALIZATION_STRIP_KEYWORDS_STRICT = [
 ]
 
 # A more aggressive list for loose normalization
-NORMALIZATION_STRIP_KEYWORDS_LOOSE = NORMALIZATION_STRIP_KEYWORDS_STRICT + [
-    'core', 'threads', 'ghz', 'matx', 'atx', 'itx', 'wifi'
+NORMALIZATION_STRIP_KEYWORDS_LOOSE = [
+    'OC', 'Edition', 'Gaming', 'Pro', 'Founders', 'Strix', 'TUF', 'ROG',
+    'Aorus', 'Windforce', 'Eagle', 'Vision', 'Ventus', 'Suprim', 'Trio',
+    'Graphics Card', 'CPU', 'Processor', 'Cooler', 'Black', 'White', 'RGB',
+    'ARGB', 'DDR4', 'DDR5', 'GDDR6X', 'GDDR7', 'PCIe', 'Gen4', 'Gen5',
+    'with Cooler', '(No Cooler)', 'WOF',
+    'threads', 'ghz', 'matx', 'atx', 'itx', 'wifi',
+    'core'
 ]
 
 def normalize_model_strict(model_string: str) -> str:
@@ -36,12 +44,19 @@ def normalize_model_strict(model_string: str) -> str:
         return ""
 
     normalized = model_string.lower()
-    for keyword in NORMALIZATION_STRIP_KEYWORDS_STRICT:
-        normalized = normalized.replace(keyword.lower(), '')
+    # Sort keywords by length to handle multi-word phrases correctly.
+    sorted_keywords = sorted(NORMALIZATION_STRIP_KEYWORDS_STRICT, key=len, reverse=True)
+    for keyword in sorted_keywords:
+        # Use a regex that correctly handles word boundaries for phrases
+        pattern = r'\b' + re.escape(keyword.lower()) + r'\b'
+        normalized = re.sub(pattern, '', normalized, flags=re.IGNORECASE)
 
-    normalized = re.sub(r'\d+\s*(gb|mb|mhz|cl\d+)', '', normalized)
-    normalized = re.sub(r'[^a-z0-9\s]', '', normalized)
-    normalized = re.sub(r'\s+', ' ', normalized).strip()
+    # Remove units but keep the numbers
+    normalized = re.sub(r'(\d+)\s*(gb|mb|mhz|cl\d+)', r'\1', normalized, flags=re.IGNORECASE)
+    # General cleanup: remove non-essential characters but preserve hyphens in model numbers
+    normalized = re.sub(r'[^a-z0-9\s-]', '', normalized)
+    # Replace multiple spaces with a single space
+    normalized = re.sub(r'\s{2,}', ' ', normalized).strip()
     return normalized
 
 def normalize_model_loose(model_string: str) -> str:
@@ -52,14 +67,19 @@ def normalize_model_loose(model_string: str) -> str:
         return ""
 
     normalized = model_string.lower()
-    for keyword in NORMALIZATION_STRIP_KEYWORDS_LOOSE:
-        normalized = normalized.replace(keyword.lower(), '')
-        
-    # Remove specs like "6-core", "4.6ghz", etc.
-    normalized = re.sub(r'\b\d+(\-|\s)?(core|thread|ghz|mhz|gb|mb)\b', '', normalized)
     
-    normalized = re.sub(r'[^a-z0-9\s]', '', normalized)
-    normalized = re.sub(r'\s+', ' ', normalized).strip()
+    # A single, more robust regex to remove various specs like "24-core", "3.0ghz", "8-core".
+    # This runs BEFORE the keyword stripping to avoid partial matches.
+    normalized = re.sub(r'\b\d+(\.\d+)?\s*-?(core|ghz)\b', '', normalized, flags=re.IGNORECASE)
+
+    sorted_keywords = sorted(NORMALIZATION_STRIP_KEYWORDS_LOOSE, key=len, reverse=True)
+    for keyword in sorted_keywords:
+        pattern = r'\b' + re.escape(keyword.lower()) + r'\b'
+        normalized = re.sub(pattern, '', normalized, flags=re.IGNORECASE)
+    
+    # General cleanup
+    normalized = re.sub(r'[^a-z0-9\s-]', '', normalized)
+    normalized = re.sub(r'\s{2,}', ' ', normalized).strip()
     return normalized
 
 def _parse_cpu(name: str) -> dict:
@@ -164,7 +184,7 @@ def _parse_motherboard(name: str) -> dict:
     elif "mini-itx" in name_lower or "mitx" in name_lower: attributes["form_factor"] = "Mini-ITX"
 
     # Chipset (Brand specific)
-    intel_chipset_match = re.search(r'\b([ZBHXW]\d{3,4})\b', name, re.IGNORECASE)
+    intel_chipset_match = re.search(r'\b([ZBHXW]\d{3,4})', name, re.IGNORECASE)
     amd_chipset_match = re.search(r'\b([XBA]\d{3}E?)\b', name, re.IGNORECASE)
 
     if attributes.get("socket") in ["AM5", "AM4"] or "amd" in name_lower:
@@ -247,18 +267,19 @@ def _parse_psu(name: str) -> dict:
     name_lower = name.lower()
 
     # Wattage
-    wattage_match = re.search(r'(\d{3,4})\s?W', name, re.IGNORECASE)
+    wattage_match = re.search(r'(\d{3,4})W', name, re.IGNORECASE)
     if wattage_match:
         attributes["wattage"] = int(wattage_match.group(1))
 
     # 80+ Rating
-    if "80 plus" in name_lower or "80+" in name_lower:
-        if "titanium" in name_lower: attributes["rating"] = "80+ Titanium"
-        elif "platinum" in name_lower: attributes["rating"] = "80+ Platinum"
-        elif "gold" in name_lower: attributes["rating"] = "80+ Gold"
-        elif "silver" in name_lower: attributes["rating"] = "80+ Silver"
-        elif "bronze" in name_lower: attributes["rating"] = "80+ Bronze"
-        else: attributes["rating"] = "80+ White"
+    # FIX: More robust check that doesn't rely on the "80+" prefix.
+    if "titanium" in name_lower: attributes["rating"] = "80+ Titanium"
+    elif "platinum" in name_lower: attributes["rating"] = "80+ Platinum"
+    elif "gold" in name_lower: attributes["rating"] = "80+ Gold"
+    elif "silver" in name_lower: attributes["rating"] = "80+ Silver"
+    elif "bronze" in name_lower: attributes["rating"] = "80+ Bronze"
+    elif "80 plus" in name_lower or "80+" in name_lower:
+        attributes["rating"] = "80+ White"
 
     # Modularity
     if "fully modular" in name_lower: attributes["modularity"] = "Fully Modular"
@@ -304,7 +325,8 @@ def parse_product_attributes(name: str, category_name: str) -> dict:
     if "motherboard" in category_name: return _parse_motherboard(name)
     if "memory" in category_name or "ram" in category_name: return _parse_ram(name)
     if "storage" in category_name or "ssd" in category_name or "hdd" in category_name: return _parse_storage(name)
-    if "power supply" in category_name or "psu" in category_name: return _parse_psu(name)
+    # FIX: More flexible check for "power supply" or "power supplies"
+    if "power suppl" in category_name or "psu" in category_name: return _parse_psu(name)
     if "case" in category_name: return _parse_case(name)
     if "cooling" in category_name: return _parse_cooler(name)
         
@@ -321,7 +343,8 @@ def parse_product_name(name: str) -> dict:
 
     found_brand = None
     for brand in KNOWN_BRANDS:
-        if f" {brand.lower()} " in f" {name.lower()} ":
+        # Use word boundaries to avoid matching substrings inside other words
+        if re.search(r'\b' + re.escape(brand) + r'\b', name, re.IGNORECASE):
              found_brand = brand
              break
     
@@ -333,7 +356,8 @@ def parse_product_name(name: str) -> dict:
 
     if found_brand:
         parsed_data["brand"] = found_brand
-        model_str = name.replace(found_brand, "", 1).strip()
+        # Use regex to replace only the first case-insensitive match
+        model_str = re.sub(r'\b' + re.escape(found_brand) + r'\b', '', name, count=1, flags=re.IGNORECASE).strip()
         parsed_data["model"] = model_str
 
     return parsed_data
