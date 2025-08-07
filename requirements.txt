@@ -10,3 +10,5 @@ webdriver-manager
 undetected-chromedriver
 APScheduler
 redis
+thefuzz
+python-Levenshtein

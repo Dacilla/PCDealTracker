@@ -38,7 +38,7 @@ class Retailer(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     url: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
-    logo_url: Mapped[str] = mapped_column(String(255), nullable=True) # New column
+    logo_url: Mapped[str] = mapped_column(String(255), nullable=True)
     products: Mapped[List["Product"]] = relationship(back_populates="retailer")
     def __repr__(self) -> str:
         return f"Retailer(id={self.id!r}, name={self.name!r})"
@@ -58,6 +58,8 @@ class Product(Base):
     name: Mapped[str] = mapped_column(String, nullable=False, index=True)
     brand: Mapped[str] = mapped_column(String, index=True, nullable=True)
     model: Mapped[str] = mapped_column(String, index=True, nullable=True)
+    normalized_model: Mapped[str] = mapped_column(String, index=True, nullable=True)
+    loose_normalized_model: Mapped[str] = mapped_column(String, index=True, nullable=True) # New field for looser matching
     sku: Mapped[str] = mapped_column(String, nullable=True)
     url: Mapped[str] = mapped_column(String, nullable=False, unique=True)
     image_url: Mapped[str] = mapped_column(String, nullable=True)

@@ -1,3 +1,4 @@
+# backend/app/scrapers/base_scraper.py
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -11,7 +12,8 @@ import datetime
 import threading
 
 from ..database import Product, PriceHistory, ProductStatus, Category
-from ..utils.parsing import parse_product_name
+# Import the new normalization utilities
+from ..utils.parsing import parse_product_name, normalize_model_strict, normalize_model_loose
 
 # A lock to prevent race conditions during driver initialization
 _driver_lock = threading.Lock()
@@ -95,7 +97,7 @@ class BaseScraper:
     def _update_product_and_detect_deal(self, product_data: dict, category: Category):
         """
         Handles the core logic of adding or updating a product in the database,
-        including data enrichment, price history tracking, and deal detection.
+        including data enrichment, normalization, price history tracking, and deal detection.
         """
         product_url = product_data.get("url")
         if not product_url:
@@ -106,6 +108,10 @@ class BaseScraper:
         
         product_name = product_data.get("name", "")
         enriched_data = parse_product_name(product_name)
+        model_str = enriched_data.get("model", "")
+        # Generate both normalized model strings
+        strict_normalized_model = normalize_model_strict(model_str)
+        loose_normalized_model = normalize_model_loose(model_str)
         
         existing_product = session.execute(
             select(Product).where(Product.url == product_url)
@@ -117,7 +123,9 @@ class BaseScraper:
             
             product.name = product_name
             product.brand = enriched_data.get("brand")
-            product.model = enriched_data.get("model")
+            product.model = model_str
+            product.normalized_model = strict_normalized_model
+            product.loose_normalized_model = loose_normalized_model
             product.previous_price = product.current_price
             product.current_price = product_data.get("price")
             product.image_url = product_data.get("image_url")
@@ -161,7 +169,9 @@ class BaseScraper:
             new_product = Product(
                 name=product_name,
                 brand=enriched_data.get("brand"),
-                model=enriched_data.get("model"),
+                model=model_str,
+                normalized_model=strict_normalized_model,
+                loose_normalized_model=loose_normalized_model,
                 url=product_data.get("url"),
                 current_price=product_data.get("price"),
                 previous_price=product_data.get("price"),
@@ -218,9 +228,15 @@ class BaseScraper:
     def close(self):
         """
         Gracefully closes the scraper, ensuring delisted products are marked
-        and the webdriver is quit.
+        and the webdriver is quit. This now handles potential OSErrors on shutdown.
         """
         self.mark_delisted_products()
         
         if self.driver:
-            self.driver.quit()
+            try:
+                self.driver.quit()
+            except OSError as e:
+                # This can happen on Windows if the handle is already invalid during shutdown.
+                # It's safe to ignore as the process is ending anyway.
+                print(f"Ignoring non-critical error during driver shutdown: {e}")
+

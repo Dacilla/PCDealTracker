@@ -1,3 +1,4 @@
+# scripts/run_scraper.py
 import os
 import sys
 import time
@@ -11,7 +12,8 @@ from backend.app.config import settings
 from scripts.init_database import setup_database
 from backend.app.dependencies import SessionLocal
 from backend.app.database import ScrapeLog
-from scripts.merge_products import group_products_by_model
+# Import the new merging and clearing functions
+from scripts.merge_products import clear_existing_merged_products, merge_products_with_fuzzy_logic
 # Import the cache clearing utility
 from backend.app.redis_client import clear_all_cache
 
@@ -41,22 +43,23 @@ ALL_SCRAPERS = [
 
 def main():
     """
-    Initializes the database, runs all scrapers, merges products,
-    and finally clears the cache.
+    Initializes the database, runs all scrapers, performs a full rebuild of
+    merged products, and finally clears the cache.
     """
-    # --- Step 1: Initialize the database ---
-    print("--- Initializing Database ---")
-    setup_database()
-    print("--- Database Initialization Complete ---")
-
-    print("\n--- Starting All Scrapers Concurrently ---")
-
-    max_workers = settings.max_concurrent_scrapers
-    shutdown_event = threading.Event()
     db_session = SessionLocal()
-    print(f"Max concurrent scrapers set to: {max_workers}")
-
+    
     try:
+        # --- Step 1: Initialize the database ---
+        print("--- Initializing Database ---")
+        setup_database()
+        print("--- Database Initialization Complete ---")
+
+        print("\n--- Starting All Scrapers Concurrently ---")
+
+        max_workers = settings.max_concurrent_scrapers
+        shutdown_event = threading.Event()
+        print(f"Max concurrent scrapers set to: {max_workers}")
+
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_scraper = {}
             for scraper_func in ALL_SCRAPERS:
@@ -96,14 +99,18 @@ def main():
         db_session.commit()
 
     finally:
-        db_session.close()
         print("\n--- All Scrapers Have Completed Their Execution ---")
     
     if not shutdown_event.is_set():
-        # --- Step 2: Run the product merging script ---
-        group_products_by_model()
+        # --- Step 2: Perform a full rebuild of merged products ---
+        print("\n--- Performing Full Merged Product Rebuild ---")
+        clear_existing_merged_products(db_session)
+        merge_products_with_fuzzy_logic()
+        
         # --- Step 3: Clear the cache to reflect the new data ---
         clear_all_cache()
+        
+    db_session.close()
 
 
 if __name__ == "__main__":

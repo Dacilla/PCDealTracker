@@ -14,6 +14,54 @@ KNOWN_BRANDS = [
 ]
 KNOWN_BRANDS.sort(key=len, reverse=True)
 
+# List of common, non-essential keywords to remove during strict normalization
+NORMALIZATION_STRIP_KEYWORDS_STRICT = [
+    'OC', 'Edition', 'Gaming', 'Pro', 'Founders', 'Strix', 'TUF', 'ROG',
+    'Aorus', 'Windforce', 'Eagle', 'Vision', 'Ventus', 'Suprim', 'Trio',
+    'Graphics Card', 'CPU', 'Processor', 'Cooler', 'Black', 'White', 'RGB',
+    'ARGB', 'DDR4', 'DDR5', 'GDDR6X', 'GDDR7', 'PCIe', 'Gen4', 'Gen5',
+    'with Cooler', '(No Cooler)', 'WOF'
+]
+
+# A more aggressive list for loose normalization
+NORMALIZATION_STRIP_KEYWORDS_LOOSE = NORMALIZATION_STRIP_KEYWORDS_STRICT + [
+    'core', 'threads', 'ghz', 'matx', 'atx', 'itx', 'wifi'
+]
+
+def normalize_model_strict(model_string: str) -> str:
+    """
+    Cleans and standardizes a model string to improve matching across retailers.
+    """
+    if not model_string:
+        return ""
+
+    normalized = model_string.lower()
+    for keyword in NORMALIZATION_STRIP_KEYWORDS_STRICT:
+        normalized = normalized.replace(keyword.lower(), '')
+
+    normalized = re.sub(r'\d+\s*(gb|mb|mhz|cl\d+)', '', normalized)
+    normalized = re.sub(r'[^a-z0-9\s]', '', normalized)
+    normalized = re.sub(r'\s+', ' ', normalized).strip()
+    return normalized
+
+def normalize_model_loose(model_string: str) -> str:
+    """
+    A more aggressive normalization that strips out technical specs to find the core model.
+    """
+    if not model_string:
+        return ""
+
+    normalized = model_string.lower()
+    for keyword in NORMALIZATION_STRIP_KEYWORDS_LOOSE:
+        normalized = normalized.replace(keyword.lower(), '')
+        
+    # Remove specs like "6-core", "4.6ghz", etc.
+    normalized = re.sub(r'\b\d+(\-|\s)?(core|thread|ghz|mhz|gb|mb)\b', '', normalized)
+    
+    normalized = re.sub(r'[^a-z0-9\s]', '', normalized)
+    normalized = re.sub(r'\s+', ' ', normalized).strip()
+    return normalized
+
 def _parse_cpu(name: str) -> dict:
     """Parses attributes for a CPU name."""
     attributes = {}
