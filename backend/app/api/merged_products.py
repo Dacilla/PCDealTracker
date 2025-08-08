@@ -1,3 +1,4 @@
+# backend/app/api/merged_products.py
 import datetime
 from typing import List, Optional
 from fastapi import APIRouter, Depends, Query, HTTPException, Request
@@ -56,7 +57,14 @@ def _process_merged_product(mp: MergedProduct, db: Session) -> dict:
     """Helper function to process a single MergedProduct object and return a dict."""
     merged_schema = MergedProductSchema.model_validate(mp)
     
-    merged_schema.listings = [ProductSchema.model_validate(p) for p in mp.products]
+    # The status needs to be accessed as a string for the schema
+    validated_listings = []
+    for p in mp.products:
+        p_dict = ProductSchema.model_validate(p).model_dump()
+        p_dict['status'] = p.status.value # Ensure status is the string value
+        validated_listings.append(ProductSchema.model_validate(p_dict))
+    
+    merged_schema.listings = validated_listings
     
     available_listings = [p for p in mp.products if p.current_price is not None and p.status == ProductStatus.AVAILABLE]
     if available_listings:
@@ -72,7 +80,7 @@ def _process_merged_product(mp: MergedProduct, db: Session) -> dict:
             func.max(PriceHistory.price)
         ).filter(PriceHistory.product_id.in_(product_ids)).first()
 
-        if price_stats:
+        if price_stats and price_stats[0] is not None:
             merged_schema.msrp = price_stats[1]
 
             all_time_low_entry = db.query(PriceHistory)\
@@ -111,14 +119,15 @@ def read_merged_products(
     cache_key = f"merged_products:{str(request.query_params)}"
     cached_result = get_cache(cache_key)
     if cached_result:
-        print(f"--- Serving merged products from cache: {cache_key} ---")
+        # print(f"--- Serving merged products from cache: {cache_key} ---")
         return cached_result
 
-    print(f"--- Fetching merged products from DB: {cache_key} ---")
+    # print(f"--- Fetching merged products from DB: {cache_key} ---")
     
     min_price_subquery = (
         select(merged_product_association.c.merged_product_id, func.min(Product.current_price).label("min_price"))
         .join(Product, merged_product_association.c.product_id == Product.id)
+        # FIX: Explicitly use the enum's string value in the query.
         .where(Product.status == ProductStatus.AVAILABLE)
         .group_by(merged_product_association.c.merged_product_id).subquery()
     )
@@ -148,15 +157,20 @@ def read_merged_products(
             else: filters.append(MergedProduct.attributes[key].as_string() == value)
 
     if filters:
-        query = query.where(*filters)
+        query = query.where(and_(*filters))
 
-    count_query = select(func.count(MergedProduct.id.distinct())).join(min_price_subquery, MergedProduct.id == min_price_subquery.c.merged_product_id, isouter=is_outer_join).where(*filters)
+    count_query = select(func.count(MergedProduct.id.distinct())).join(min_price_subquery, MergedProduct.id == min_price_subquery.c.merged_product_id, isouter=is_outer_join)
+    if filters:
+        count_query = count_query.where(and_(*filters))
+        
     total = db.execute(count_query).scalar_one()
 
     # --- Sorting Logic ---
+    # FIX: Ensure only one order_by clause is applied.
+    order_clause = None
     if sort_by == "price":
-        order_column = asc(min_price_subquery.c.min_price) if sort_order == "asc" else desc(min_price_subquery.c.min_price)
-        query = query.order_by(order_column.nulls_last())
+        order_clause = asc(min_price_subquery.c.min_price) if sort_order == "asc" else desc(min_price_subquery.c.min_price)
+        query = query.order_by(order_clause.nulls_last())
     elif sort_by == "recent":
         most_recent_date_subquery = (
             select(
@@ -173,9 +187,8 @@ def read_merged_products(
             MergedProduct.id == most_recent_date_subquery.c.merged_product_id,
             isouter=True
         )
-        # FIX: Correctly reference the subquery defined for this sorting option
-        order_column = desc(most_recent_date_subquery.c.max_date)
-        query = query.order_by(order_column.nulls_last())
+        order_clause = desc(most_recent_date_subquery.c.max_date)
+        query = query.order_by(order_clause.nulls_last())
     elif sort_by == "discount" or sort_by == "discount_amount":
         max_price_subquery = (
             select(
@@ -200,11 +213,11 @@ def read_merged_products(
         else: # discount_amount
             discount_calc = (max_price_subquery.c.max_price - min_price_subquery.c.min_price)
         
-        order_column = desc(discount_calc)
-        query = query.order_by(order_column.nulls_last())
-    else:
-        order_column = asc(MergedProduct.canonical_name) if sort_order == "asc" else desc(MergedProduct.canonical_name)
-        query = query.order_by(order_column)
+        order_clause = desc(discount_calc)
+        query = query.order_by(order_clause.nulls_last())
+    else: # Default sort by name
+        order_clause = asc(MergedProduct.canonical_name) if sort_order == "asc" else desc(MergedProduct.canonical_name)
+        query = query.order_by(order_clause)
     
     skip = (page - 1) * page_size
     results = db.execute(query.offset(skip).limit(page_size)).scalars().unique().all()
@@ -220,10 +233,10 @@ def read_single_merged_product(merged_product_id: int, db: Session = Depends(get
     cache_key = f"merged_product:{merged_product_id}"
     cached_product = get_cache(cache_key)
     if cached_product:
-        print(f"--- Serving single product from cache: {cache_key} ---")
+        # print(f"--- Serving single product from cache: {cache_key} ---")
         return cached_product
 
-    print(f"--- Fetching single product from DB: {cache_key} ---")
+    # print(f"--- Fetching single product from DB: {cache_key} ---")
     query = (
         select(MergedProduct)
         .options(joinedload(MergedProduct.category), selectinload(MergedProduct.products).joinedload(Product.retailer))

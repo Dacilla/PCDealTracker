@@ -1,3 +1,4 @@
+# backend/app/database.py
 import datetime
 from typing import List
 
@@ -66,7 +67,8 @@ class Product(Base):
     current_price: Mapped[float] = mapped_column(Float, nullable=True)
     previous_price: Mapped[float] = mapped_column(Float, nullable=True)
     on_sale: Mapped[bool] = mapped_column(Boolean, default=False)
-    status: Mapped[ProductStatus] = mapped_column(SQLAlchemyEnum(ProductStatus), default=ProductStatus.AVAILABLE)
+    # FIX: Use native_enum=False for better compatibility, especially with SQLite in tests.
+    status: Mapped[ProductStatus] = mapped_column(SQLAlchemyEnum(ProductStatus, native_enum=False), default=ProductStatus.AVAILABLE)
     retailer_id: Mapped[int] = mapped_column(ForeignKey("retailers.id"))
     category_id: Mapped[int] = mapped_column(ForeignKey("categories.id"))
     retailer: Mapped["Retailer"] = relationship(back_populates="products")
