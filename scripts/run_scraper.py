@@ -14,18 +14,23 @@ from backend.app.dependencies import SessionLocal
 from backend.app.database import ScrapeLog
 # Import the new merging and clearing functions
 from scripts.merge_products import clear_existing_merged_products, merge_products_with_fuzzy_logic
+from backend.app.services.v2_catalog import NATIVE_V2_RETAILER_NAMES, rebuild_v2_catalog_from_legacy
 # Import the cache clearing utility
 from backend.app.redis_client import clear_all_cache
 
 # Import the individual scraper runner functions
 from backend.app.scrapers.pccg_scraper import run_pccg_scraper
 from backend.app.scrapers.scorptec_scraper import run_scorptec_scraper
+from backend.app.scrapers.scorptec_v2_scraper import run_scorptec_v2_scraper
 from backend.app.scrapers.centrecom_scraper import run_centrecom_scraper
 from backend.app.scrapers.msy_scraper import run_msy_scraper
 from backend.app.scrapers.umart_scraper import run_umart_scraper
 from backend.app.scrapers.computeralliance_scraper import run_computeralliance_scraper
+from backend.app.scrapers.computeralliance_v2_scraper import run_computeralliance_v2_scraper
 from backend.app.scrapers.jw_scraper import run_jw_scraper
+from backend.app.scrapers.jw_v2_scraper import run_jw_v2_scraper
 from backend.app.scrapers.shoppingexpress_scraper import run_shoppingexpress_scraper
+from backend.app.scrapers.shoppingexpress_v2_scraper import run_shoppingexpress_v2_scraper
 # from backend.app.scrapers.austin_scraper import run_austin_scraper # Temporarily disabled
 
 # A list of all scraper functions to be executed
@@ -106,8 +111,29 @@ def main():
         print("\n--- Performing Full Merged Product Rebuild ---")
         clear_existing_merged_products(db_session)
         merge_products_with_fuzzy_logic()
+
+        # --- Step 3: Rebuild the persisted v2 catalog from the refreshed legacy data ---
+        print("\n--- Rebuilding Persisted V2 Catalog ---")
+        rebuild_v2_catalog_from_legacy(
+            db_session,
+            clear_existing=True,
+            exclude_retailer_names=NATIVE_V2_RETAILER_NAMES,
+        )
+
+        # --- Step 4: Refresh one retailer through the native v2 ingestion path ---
+        print("\n--- Refreshing Computer Alliance Through Native V2 Ingestion ---")
+        run_computeralliance_v2_scraper(shutdown_event)
+
+        print("\n--- Refreshing Shopping Express Through Native V2 Ingestion ---")
+        run_shoppingexpress_v2_scraper(shutdown_event)
+
+        print("\n--- Refreshing Scorptec Through Native V2 Ingestion ---")
+        run_scorptec_v2_scraper(shutdown_event)
+
+        print("\n--- Refreshing JW Computers Through Native V2 Ingestion ---")
+        run_jw_v2_scraper(shutdown_event)
         
-        # --- Step 3: Clear the cache to reflect the new data ---
+        # --- Step 5: Clear the cache to reflect the new data ---
         clear_all_cache()
         
     db_session.close()

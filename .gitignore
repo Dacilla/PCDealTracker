@@ -61,12 +61,17 @@ node_modules/
 # Cache
 .cache/
 .pytest_cache/
+*.tsbuildinfo
 
 # Coverage reports
 htmlcov/
 .coverage
 .coverage.*
 coverage.xml
+
+# Frontend build artifacts
+frontend/dist/
+frontend/vite.config.d.ts
 
 # Docker
 .dockerignore

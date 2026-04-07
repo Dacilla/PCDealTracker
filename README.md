@@ -1,109 +1,236 @@
 # PCDealTracker
 
-A web application for tracking PC hardware prices across Australian retailers. The project monitors multiple stores to identify price changes, sales, and historical low prices for computer components.
+PCDealTracker tracks Australian PC hardware pricing across multiple retailers.
+The project is currently in transition from a legacy scraper-plus-merge system to a persisted `v2` catalog built around retailer listings, canonical products, offers, and price observations.
 
-## Purpose
+## Overview
 
-This tool addresses the lack of comprehensive price tracking for PC hardware in the Australian market. While sites like PCPartPicker exist, they don't clearly highlight when components go on sale or reach record low prices. PCDealTracker aims to fill this gap by providing clear indicators for deals and maintaining detailed price history.
+- Backend: FastAPI + SQLAlchemy
+- Frontend: React + Vite + TypeScript
+- Databases: SQLite for local development, PostgreSQL for containerized/runtime use
+- Scraping: Selenium / undetected-chromedriver in the legacy layer, with native `v2` ingestion being rolled out retailer by retailer
 
-## Features
+## Current Status
 
-- Price tracking across multiple Australian PC retailers
-- Historical price data with visual charts
-- Detection of sales and record low prices
-- Search and filtering by component category
-- Web interface for browsing current deals
+### Done
 
-## Supported Retailers
+- Repaired major legacy blockers that previously made the repo unreliable:
+  - broken merged-product endpoint file
+  - broken merged-product rebuild path
+  - config crash on invalid `DEBUG` values
+  - import-time schema creation and Redis flush side effects
+  - inconsistent local frontend/backend host assumptions
+  - flaky API tests caused by in-memory SQLite lifecycle issues
+- Added a persisted `v2` schema with Alembic migrations.
+- Added `v2` API endpoints for products, offers, history, filters, and trends.
+- Replaced the old single-file frontend with a React/Vite/TypeScript frontend.
+- Added native `v2` ingestion paths for:
+  - Computer Alliance
+  - Shopping Express
+  - Scorptec
+  - JW Computers
+- Updated the legacy backfill so those native-`v2` retailers are excluded by default.
 
-- PC Case Gear
-- Scorptec
-- Centre Com
-- MSY Technology
-- Umart
-- Computer Alliance
-- JW Computers
-- Shopping Express
-- Austin Computers
-- BudgetPC
+### Still To Do
 
-## System Requirements
+- Port the remaining retailers off the legacy `Product` bridge and into native `v2` ingestion.
+- Add fixture-based scraper contract tests so parser changes do not depend on live sites.
+- Reduce dependence on the old Selenium-heavy scraper layer.
+- Add clearer operational tooling around scrape runs, ambiguous matches, and manual review.
+- Keep evolving the persisted catalog and matching pipeline so more logic moves out of read-time derivation.
 
-- Python 3.11+ (3.13 recommended)
-- Rust (for some Python package dependencies)
-- Git
-- Visual Studio Build Tools (Windows)
+## Architecture
 
-## Quick Start
+### Legacy Flow
 
-### Using Docker
-```bash
-git clone https://github.com/YOUR_USERNAME/pcdealtracker.git
-cd pcdealtracker
-cp .env.example .env
-docker-compose up -d
+```text
+Retailer scraper
+  -> Product
+  -> PriceHistory
+  -> merged product rebuild
+  -> legacy API
 ```
 
-Visit http://localhost:3000 to view the application.
+### `v2` Flow
 
-### Manual Setup
+```text
+Retailer scraper
+  -> RetailerListing
+  -> CanonicalProduct
+  -> Offer
+  -> PriceObservation
+  -> MatchDecision / ScrapeRun
+  -> /api/v2/*
+```
+
+### Key `v2` Models
+
+- `CanonicalProduct`: persisted grouped product identity
+- `RetailerListing`: raw retailer listing record
+- `Offer`: retailer offer attached to a canonical product
+- `PriceObservation`: time-series price/in-stock observation
+- `ScrapeRun`: scrape execution metadata
+- `MatchDecision`: record of how a listing was attached to a canonical product
+
+## Repository Layout
+
+```text
+backend/
+  app/
+    api/
+    scrapers/
+    services/
+    utils/
+    database.py
+  tests/
+frontend/
+scripts/
+alembic/
+```
+
+## Requirements
+
+- Python 3.13+ recommended
+- Node.js 20+ recommended
+- A local virtual environment for backend dependencies
+- Chrome/Chromium compatible with the Selenium setup if running scrapers
+
+## Local Development
+
+### Backend
+
 ```bash
-# Clone the repository
-git clone https://github.com/YOUR_USERNAME/pcdealtracker.git
-cd pcdealtracker
-
-# Set up backend environment
-cd backend
 python -m venv venv
-venv\Scripts\activate  # Windows
-pip install --upgrade pip setuptools wheel
+venv\Scripts\activate
 pip install -r requirements.txt
-
-# Configure environment
-cp .env.example .env
-# Edit .env with your settings
-
-# Run backend
-python app/main.py
-
-# Run frontend (in another terminal)
-cd frontend
-python -m http.server 3000
+copy .env.example .env
+uvicorn backend.app.main:app --reload
 ```
 
-Visit http://localhost:3000 to view the application.
+Backend URLs:
 
-## Development
+- API docs: `http://localhost:8000/docs`
+- Legacy API: `http://localhost:8000/api/v1/*`
+- `v2` API: `http://localhost:8000/api/v2/*`
 
-### Project Structure
-- `frontend/` - HTML/JavaScript frontend interface
-- `backend/` - FastAPI backend with web scrapers and database
-- `docs/` - Documentation
-- `tests/` - Test suites
+### Frontend
 
-### Requirements
-- Python 3.11 or higher
-- Rust (required for some Python dependencies)
-- Git
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
-See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for development setup and guidelines.
+Frontend URL:
 
-## Development Status
+- `http://localhost:5173`
 
-This is currently a personal project in early development. The current implementation includes a frontend prototype demonstrating the intended user interface and functionality.
+## Docker
 
-## Planned Implementation
+```bash
+docker-compose up --build
+```
 
-- FastAPI backend for data management and API endpoints
-- Web scrapers for individual retailer sites
-- SQLite database for development, PostgreSQL for production
-- Automated price monitoring with scheduled updates
-- Price change detection algorithms
+Services:
 
-## License
+- Frontend: `http://localhost:5173`
+- Backend: `http://localhost:8000`
+- Postgres: `localhost:5432`
+- Redis: `localhost:6379`
 
-MIT License - see [LICENSE](LICENSE) file for details.
+## Database Migrations
 
-## Disclaimer
+Alembic manages the persisted `v2` schema.
 
-This project is for educational and personal use. Please respect retailers' terms of service and implement appropriate rate limiting when scraping.
+```bash
+venv\Scripts\activate
+alembic upgrade head
+```
+
+Current `v2` tables created by migration:
+
+- `canonical_products`
+- `retailer_listings`
+- `offers`
+- `price_observations`
+- `scrape_runs`
+- `match_decisions`
+
+## Backfill
+
+To populate the persisted `v2` catalog from legacy `products` and `price_history` data:
+
+```bash
+venv\Scripts\activate
+python scripts/backfill_v2_catalog.py
+```
+
+By default, this excludes retailers that already have native `v2` ingestion.
+
+If you explicitly want to include those retailers through the old bridge:
+
+```bash
+python scripts/backfill_v2_catalog.py --include-native-v2
+```
+
+## Scraping Workflow
+
+Run the full scraper pipeline:
+
+```bash
+venv\Scripts\activate
+python scripts/run_scraper.py
+```
+
+Current scrape flow:
+
+1. Run the legacy retailer scrapers.
+2. Rebuild legacy merged products.
+3. Backfill the persisted `v2` catalog from the remaining legacy retailers.
+4. Refresh native-`v2` retailers directly through their persisted ingestion paths.
+5. Clear API cache.
+
+## Testing
+
+Run the backend test suite:
+
+```bash
+venv\Scripts\activate
+pytest backend/tests/
+```
+
+Notes:
+
+- API tests use temporary SQLite database files instead of `:memory:`.
+- Current coverage includes API behavior, parsing helpers, `v2` ingestion paths, and schema/backfill behavior.
+
+## Native `v2` Coverage
+
+Retailers currently on native `v2` ingestion:
+
+- Computer Alliance
+- Shopping Express
+- Scorptec
+- JW Computers
+
+Retailers still relying on the legacy scrape + backfill bridge:
+
+- PCCG
+- Centre Com
+- MSY
+- Umart
+- Any temporarily disabled retailer paths such as Austin
+
+## Known Limits
+
+- The repo still contains a large amount of legacy code and scraper logic.
+- Several retailers still depend on the old `Product`/`PriceHistory` path.
+- Scraper testing is not yet fixture-driven for all retailers.
+- Selenium remains the dominant scraping mechanism, which is slower and more fragile than a more modern adapter approach.
+
+## Recommended Next Work
+
+1. Port `Centre Com` or `Umart` to native `v2` ingestion.
+2. Add saved HTML fixtures and contract tests for the migrated retailers.
+3. Keep shrinking the legacy bridge until the old `Product` path is no longer the source of truth.
+4. Add better operational visibility for scrape runs and reviewable matching decisions.

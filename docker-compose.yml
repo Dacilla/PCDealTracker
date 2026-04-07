@@ -1,36 +1,43 @@
-version: '3.8'
-
 services:
   backend:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=postgresql://pcdeal:pcdeal123@db:5432/pcdealtracker
-      - REDIS_URL=redis://redis:6379
+      DATABASE_URL: postgresql://pcdeal:pcdeal123@db:5432/pcdealtracker
+      REDIS_URL: redis://redis:6379
+      CACHE_ENABLED: "false"
+      API_CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
+      DEBUG: release
     depends_on:
       - db
       - redis
     volumes:
-      - ./backend:/app
-      - ./logs:/app/logs  # Windows-friendly logging
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+      - .:/app
+    command: uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload
 
   frontend:
-    build: ./frontend
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
     ports:
-      - "3000:3000"
+      - "5173:5173"
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
     depends_on:
       - backend
     volumes:
       - ./frontend:/app
+      - /app/node_modules
 
   db:
     image: postgres:15
     environment:
-      - POSTGRES_DB=pcdealtracker
-      - POSTGRES_USER=pcdeal
-      - POSTGRES_PASSWORD=pcdeal123
+      POSTGRES_DB: pcdealtracker
+      POSTGRES_USER: pcdeal
+      POSTGRES_PASSWORD: pcdeal123
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
