@@ -226,7 +226,7 @@ def test_legacy_backfill_can_exclude_native_v2_retailers(tmp_path):
     session = SessionLocal()
     try:
         native_retailer = Retailer(name="Scorptec", url="https://www.scorptec.com.au")
-        legacy_retailer = Retailer(name="Centre Com", url="https://www.centrecom.com.au")
+        legacy_retailer = Retailer(name="MSY", url="https://www.msy.com.au")
         category = Category(name="Graphics Cards")
         session.add_all([native_retailer, legacy_retailer, category])
         session.commit()
@@ -251,7 +251,7 @@ def test_legacy_backfill_can_exclude_native_v2_retailers(tmp_path):
                     model="RTX 5070 VENTUS 2X OC 12GB",
                     normalized_model="rtx 5070 ventus 2x oc 12",
                     loose_normalized_model="rtx 5070 12",
-                    url="https://www.centrecom.com.au/msi-rtx-5070-ventus",
+                    url="https://www.msy.com.au/msi-rtx-5070-ventus",
                     current_price=1249.0,
                     status=ProductStatus.AVAILABLE,
                     retailer_id=legacy_retailer.id,
@@ -272,7 +272,7 @@ def test_legacy_backfill_can_exclude_native_v2_retailers(tmp_path):
 
         assert scrape_run.listings_created == 1
         assert len(listings) == 1
-        assert listings[0].source_url == "https://www.centrecom.com.au/msi-rtx-5070-ventus"
+        assert listings[0].source_url == "https://www.msy.com.au/msi-rtx-5070-ventus"
         assert len(offers) == 1
         assert scrape_run.meta["exclude_retailer_names"] == sorted(NATIVE_V2_RETAILER_NAMES)
     finally:

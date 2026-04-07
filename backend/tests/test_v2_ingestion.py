@@ -13,6 +13,7 @@ from backend.app.database import (
     Retailer,
 )
 from backend.app.scrapers.computeralliance_v2_scraper import parse_computeralliance_listing
+from backend.app.scrapers.centrecom_v2_scraper import parse_centrecom_listing
 from backend.app.scrapers.jw_v2_scraper import parse_jw_listing
 from backend.app.scrapers.scorptec_v2_scraper import parse_scorptec_listing
 from backend.app.scrapers.shoppingexpress_v2_scraper import parse_shoppingexpress_listing
@@ -107,6 +108,25 @@ def test_parse_jw_listing_extracts_snapshot():
     assert snapshot.url == "https://www.jw.com.au/product/asus-rtx5070-dual-oc"
     assert snapshot.image_url == "https://www.jw.com.au/images/jw-5070.jpg"
     assert snapshot.price == 1259.0
+    assert snapshot.status == ProductStatus.AVAILABLE
+
+
+def test_parse_centrecom_listing_extracts_snapshot():
+    html = """
+    <div class="prbox_box" style="background-image:url(&quot;https://www.centrecom.com.au/images/5070.jpg&quot;);">
+      <a class="prbox_link" href="/asus-geforce-rtx-5070-dual-oc-12gb"></a>
+      <div class="prbox_name">ASUS GeForce RTX 5070 DUAL OC 12GB</div>
+      <div class="saleprice">$1,239.00</div>
+    </div>
+    """
+    item = BeautifulSoup(html, "html.parser").select_one(".prbox_box")
+    snapshot = parse_centrecom_listing(item, "https://www.centrecom.com.au")
+
+    assert snapshot is not None
+    assert snapshot.name == "ASUS GeForce RTX 5070 DUAL OC 12GB"
+    assert snapshot.url == "https://www.centrecom.com.au/asus-geforce-rtx-5070-dual-oc-12gb"
+    assert snapshot.image_url == "https://www.centrecom.com.au/images/5070.jpg"
+    assert snapshot.price == 1239.0
     assert snapshot.status == ProductStatus.AVAILABLE
 
 
@@ -376,6 +396,63 @@ def test_native_v2_upsert_for_jw_snapshot(tmp_path):
         assert canonical.attributes["wattage"] == 850
         assert canonical.attributes["rating"] == "80+ Platinum"
         assert offer.current_price == 289.0
+        assert decision.matcher == "fingerprint"
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_native_v2_upsert_for_centrecom_snapshot(tmp_path):
+    database_path = tmp_path / "v2_centrecom.sqlite3"
+    engine = create_engine(f"sqlite:///{database_path}", connect_args={"check_same_thread": False})
+    SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    Base.metadata.create_all(bind=engine)
+
+    session = SessionLocal()
+    try:
+        retailer = Retailer(name="Centre Com", url="https://www.centrecom.com.au")
+        category = Category(name="Storage (SSD/HDD)")
+        session.add_all([retailer, category])
+        session.commit()
+
+        scrape_run = start_scrape_run(
+            session,
+            retailer_id=retailer.id,
+            scraper_name="centrecom_v2",
+        )
+
+        result = upsert_v2_listing_snapshot(
+            session,
+            scrape_run=scrape_run,
+            retailer_id=retailer.id,
+            category_id=category.id,
+            category_name=category.name,
+            snapshot=V2ListingSnapshot(
+                name="Samsung 990 PRO 2TB PCIe 4.0 NVMe SSD",
+                url="https://www.centrecom.com.au/samsung-990-pro-2tb",
+                price=249.0,
+                status=ProductStatus.AVAILABLE,
+                image_url="https://www.centrecom.com.au/images/990-pro.jpg",
+            ),
+        )
+        finish_scrape_run(
+            session,
+            scrape_run,
+            status=ScrapeRunStatus.SUCCEEDED,
+            listings_seen=1,
+            listings_created=1,
+            listings_updated=0,
+        )
+        session.commit()
+
+        canonical = session.execute(select(CanonicalProduct)).scalar_one()
+        offer = session.execute(select(Offer)).scalar_one()
+        decision = session.execute(select(MatchDecision)).scalar_one()
+
+        assert result.listing_created is True
+        assert canonical.attributes["type"] == "NVMe SSD"
+        assert canonical.attributes["capacity_gb"] == 2000
+        assert offer.current_price == 249.0
         assert decision.matcher == "fingerprint"
     finally:
         session.close()

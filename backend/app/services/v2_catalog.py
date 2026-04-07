@@ -37,6 +37,7 @@ CATEGORY_FINGERPRINT_ATTRS = {
 }
 
 NATIVE_V2_RETAILER_NAMES = (
+    "Centre Com",
     "Computer Alliance",
     "Shopping Express",
     "Scorptec",

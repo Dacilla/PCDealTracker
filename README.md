@@ -25,6 +25,7 @@ The project is currently in transition from a legacy scraper-plus-merge system t
 - Added `v2` API endpoints for products, offers, history, filters, and trends.
 - Replaced the old single-file frontend with a React/Vite/TypeScript frontend.
 - Added native `v2` ingestion paths for:
+  - Centre Com
   - Computer Alliance
   - Shopping Express
   - Scorptec
@@ -208,6 +209,7 @@ Notes:
 
 Retailers currently on native `v2` ingestion:
 
+- Centre Com
 - Computer Alliance
 - Shopping Express
 - Scorptec
@@ -216,7 +218,6 @@ Retailers currently on native `v2` ingestion:
 Retailers still relying on the legacy scrape + backfill bridge:
 
 - PCCG
-- Centre Com
 - MSY
 - Umart
 - Any temporarily disabled retailer paths such as Austin
@@ -230,7 +231,7 @@ Retailers still relying on the legacy scrape + backfill bridge:
 
 ## Recommended Next Work
 
-1. Port `Centre Com` or `Umart` to native `v2` ingestion.
+1. Port `Umart` or `MSY` to native `v2` ingestion.
 2. Add saved HTML fixtures and contract tests for the migrated retailers.
 3. Keep shrinking the legacy bridge until the old `Product` path is no longer the source of truth.
 4. Add better operational visibility for scrape runs and reviewable matching decisions.

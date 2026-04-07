@@ -23,6 +23,7 @@ from backend.app.scrapers.pccg_scraper import run_pccg_scraper
 from backend.app.scrapers.scorptec_scraper import run_scorptec_scraper
 from backend.app.scrapers.scorptec_v2_scraper import run_scorptec_v2_scraper
 from backend.app.scrapers.centrecom_scraper import run_centrecom_scraper
+from backend.app.scrapers.centrecom_v2_scraper import run_centrecom_v2_scraper
 from backend.app.scrapers.msy_scraper import run_msy_scraper
 from backend.app.scrapers.umart_scraper import run_umart_scraper
 from backend.app.scrapers.computeralliance_scraper import run_computeralliance_scraper
@@ -132,6 +133,9 @@ def main():
 
         print("\n--- Refreshing JW Computers Through Native V2 Ingestion ---")
         run_jw_v2_scraper(shutdown_event)
+
+        print("\n--- Refreshing Centre Com Through Native V2 Ingestion ---")
+        run_centrecom_v2_scraper(shutdown_event)
         
         # --- Step 5: Clear the cache to reflect the new data ---
         clear_all_cache()
