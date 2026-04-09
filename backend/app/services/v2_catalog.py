@@ -36,6 +36,12 @@ CATEGORY_FINGERPRINT_ATTRS = {
 
 AUTO_MATCH_SCORE_THRESHOLD = 96.0
 REVIEW_QUEUE_SCORE_THRESHOLD = 75.0
+MAX_VALID_SNAPSHOT_PRICE = 50_000.0
+MODEL_SCORE_WEIGHT = 0.45
+NAME_SCORE_WEIGHT = 0.30
+BRAND_SCORE_WEIGHT = 0.15
+ATTRIBUTE_SCORE_WEIGHT = 0.10
+FINGERPRINT_BONUS_POINTS = 18.0
 
 @dataclass
 class V2ListingSnapshot:
@@ -169,6 +175,33 @@ def finish_scrape_run(
     scrape_run.error_summary = error_summary
     db.flush()
     return scrape_run
+
+
+def validate_listing_snapshot(snapshot: V2ListingSnapshot) -> V2ListingSnapshot:
+    snapshot.name = snapshot.name.strip()
+    if not snapshot.name:
+        raise ValueError("Snapshot name cannot be blank")
+    if snapshot.price is not None and (snapshot.price <= 0 or snapshot.price > MAX_VALID_SNAPSHOT_PRICE):
+        raise ValueError(f"Suspicious snapshot price {snapshot.price} for {snapshot.url}")
+    return snapshot
+
+
+def _sync_offer_denormalized_fields(
+    offer: Offer,
+    *,
+    canonical_product: CanonicalProduct,
+    category_id: int,
+    previous_price: Optional[float],
+) -> None:
+    # category_id is a query-time denormalization and must always mirror the canonical product.
+    offer.category_id = canonical_product.category_id
+    if offer.category_id != category_id:
+        raise ValueError(
+            f"Offer category {category_id} does not match canonical product category {canonical_product.category_id}"
+        )
+
+    # previous_price is duplicated onto Offer for fast UI access to "was $X" without scanning history.
+    offer.previous_price = previous_price
 
 
 def _get_latest_match_decision(db: Session, retailer_listing_id: int) -> MatchDecision | None:
@@ -344,6 +377,7 @@ def upsert_v2_listing_snapshot(
     category_name: str,
     snapshot: V2ListingSnapshot,
 ) -> UpsertResult:
+    snapshot = validate_listing_snapshot(snapshot)
     parsed_name = parse_product_name(snapshot.name)
     brand = normalize_brand(snapshot.name, parsed_name.get("brand"))
     model = parsed_name.get("model") or snapshot.name
@@ -445,29 +479,39 @@ def upsert_v2_listing_snapshot(
             canonical_product_id=canonical_product.id,
             retailer_listing_id=listing.id,
             retailer_id=retailer_id,
-            category_id=category_id,
+            category_id=canonical_product.category_id,
             listing_name=snapshot.name,
             listing_url=snapshot.url,
             image_url=snapshot.image_url,
             current_price=snapshot.price,
-            previous_price=snapshot.previous_price,
+            previous_price=None,
             status=snapshot.status,
             is_active=snapshot.status == ProductStatus.AVAILABLE,
+        )
+        _sync_offer_denormalized_fields(
+            offer,
+            canonical_product=canonical_product,
+            category_id=category_id,
+            previous_price=snapshot.previous_price,
         )
         db.add(offer)
         db.flush()
     else:
         offer.canonical_product_id = canonical_product.id
         offer.retailer_id = retailer_id
-        offer.category_id = category_id
         offer.listing_name = snapshot.name
         offer.listing_url = snapshot.url
         offer.image_url = snapshot.image_url
-        offer.previous_price = offer.current_price
         offer.current_price = snapshot.price
         offer.status = snapshot.status
         offer.is_active = snapshot.status == ProductStatus.AVAILABLE
         offer.last_seen_at = utcnow_naive()
+        _sync_offer_denormalized_fields(
+            offer,
+            canonical_product=canonical_product,
+            category_id=category_id,
+            previous_price=previous_current_price,
+        )
 
     if resolution_plan.force_offer_inactive:
         offer.is_active = False
@@ -593,8 +637,13 @@ def resolve_match_decision(
         canonical_product.is_active = True
         for offer in offers:
             offer.canonical_product_id = canonical_product.id
-            offer.category_id = canonical_product.category_id
             offer.is_active = offer.status == ProductStatus.AVAILABLE
+            _sync_offer_denormalized_fields(
+                offer,
+                canonical_product=canonical_product,
+                category_id=canonical_product.category_id,
+                previous_price=offer.previous_price,
+            )
         match_decision.canonical_product_id = canonical_product.id
     else:
         for offer in offers:
@@ -656,10 +705,16 @@ def _score_canonical_candidate(
         )
         review_fingerprint = identity_to_fingerprint(identity)
 
-    fingerprint_bonus = 18.0 if review_fingerprint and review_fingerprint == canonical_product.fingerprint else 0.0
+    fingerprint_bonus = (
+        FINGERPRINT_BONUS_POINTS if review_fingerprint and review_fingerprint == canonical_product.fingerprint else 0.0
+    )
     final_score = min(
         100.0,
-        (model_score * 0.45) + (name_score * 0.3) + (brand_score * 0.15) + (attribute_score * 0.1) + fingerprint_bonus,
+        (model_score * MODEL_SCORE_WEIGHT)
+        + (name_score * NAME_SCORE_WEIGHT)
+        + (brand_score * BRAND_SCORE_WEIGHT)
+        + (attribute_score * ATTRIBUTE_SCORE_WEIGHT)
+        + fingerprint_bonus,
     )
 
     reasons: list[str] = []

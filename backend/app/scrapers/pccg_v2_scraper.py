@@ -136,6 +136,7 @@ class PCCGV2Scraper(BaseScraper):
         print(f"Scraping product page: {page_url}")
         soup = self.get_page_content(page_url, wait_for_selector="footer")
         if not soup:
+            self.record_category_error(f"Failed to load {page_url}")
             print(f"Failed to get content from {page_url}")
             return
 
@@ -150,6 +151,7 @@ class PCCGV2Scraper(BaseScraper):
                 category=category,
             )
         else:
+            self.record_category_error(f"No known product layout found at {page_url}")
             print("No known product layout found on this page. Skipping.")
 
         self.db_session.commit()
@@ -185,7 +187,7 @@ class PCCGV2Scraper(BaseScraper):
                 else:
                     self.listings_updated += 1
             except Exception as exc:
-                print(f"  Could not ingest an item into v2. Error: {exc}")
+                self.record_item_error(str(exc))
 
     def run(self):
         try:
@@ -232,10 +234,11 @@ class PCCGV2Scraper(BaseScraper):
             finish_scrape_run(
                 self.db_session,
                 self.scrape_run,
-                status=ScrapeRunStatus.SUCCEEDED,
+                status=self.completed_status(),
                 listings_seen=self.listings_seen,
                 listings_created=self.listings_created,
                 listings_updated=self.listings_updated,
+                error_summary=self.error_summary(),
             )
             self.db_session.commit()
         except Exception as exc:
@@ -247,7 +250,7 @@ class PCCGV2Scraper(BaseScraper):
                 listings_seen=self.listings_seen,
                 listings_created=self.listings_created,
                 listings_updated=self.listings_updated,
-                error_summary=str(exc),
+                error_summary=self.combine_error_summary(str(exc)),
             )
             self.db_session.commit()
             raise

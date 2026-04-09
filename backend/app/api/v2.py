@@ -191,99 +191,117 @@ def _offer_stats_subquery():
     )
 
 
-def _serialize_offer(offer: Offer) -> dict:
-    return {
-        "id": offer.id,
-        "name": offer.listing_name,
-        "url": offer.listing_url,
-        "image_url": offer.image_url,
-        "current_price": offer.current_price,
-        "previous_price": offer.previous_price,
-        "status": offer.status.value,
-        "on_sale": (
+def _retailer_schema(retailer) -> V2RetailerSchema:
+    return V2RetailerSchema.model_validate(retailer)
+
+
+def _category_schema(category) -> V2CategorySchema:
+    return V2CategorySchema.model_validate(category)
+
+
+def _canonical_reference_schema(canonical_product: CanonicalProduct) -> V2CanonicalReferenceSchema:
+    return V2CanonicalReferenceSchema(
+        id=str(canonical_product.id),
+        canonical_name=canonical_product.canonical_name,
+        fingerprint=canonical_product.fingerprint,
+    )
+
+
+def _offer_schema(offer: Offer) -> V2OfferSchema:
+    return V2OfferSchema(
+        id=offer.id,
+        name=offer.listing_name,
+        url=offer.listing_url,
+        image_url=offer.image_url,
+        current_price=offer.current_price,
+        previous_price=offer.previous_price,
+        status=offer.status.value,
+        on_sale=(
             offer.previous_price is not None
             and offer.current_price is not None
             and offer.current_price < offer.previous_price
         ),
-        "retailer": V2RetailerSchema.model_validate(offer.retailer).model_dump(),
-    }
+        retailer=_retailer_schema(offer.retailer),
+    )
 
 
-def _serialize_scrape_run(scrape_run: ScrapeRun) -> dict:
-    return {
-        "id": scrape_run.id,
-        "retailer": (
-            V2RetailerSchema.model_validate(scrape_run.retailer).model_dump()
-            if scrape_run.retailer is not None
-            else None
-        ),
-        "started_at": scrape_run.started_at,
-        "finished_at": scrape_run.finished_at,
-        "status": scrape_run.status.value,
-        "trigger_source": scrape_run.trigger_source,
-        "scraper_name": scrape_run.scraper_name,
-        "listings_seen": scrape_run.listings_seen,
-        "listings_created": scrape_run.listings_created,
-        "listings_updated": scrape_run.listings_updated,
-        "error_summary": scrape_run.error_summary,
-        "meta": scrape_run.meta,
-    }
+def _scrape_run_schema(scrape_run: ScrapeRun) -> V2ScrapeRunSchema:
+    return V2ScrapeRunSchema(
+        id=scrape_run.id,
+        retailer=_retailer_schema(scrape_run.retailer) if scrape_run.retailer is not None else None,
+        started_at=scrape_run.started_at,
+        finished_at=scrape_run.finished_at,
+        status=scrape_run.status.value,
+        trigger_source=scrape_run.trigger_source,
+        scraper_name=scrape_run.scraper_name,
+        listings_seen=scrape_run.listings_seen,
+        listings_created=scrape_run.listings_created,
+        listings_updated=scrape_run.listings_updated,
+        error_summary=scrape_run.error_summary,
+        meta=scrape_run.meta,
+    )
 
 
-def _serialize_match_decision(match_decision: MatchDecision) -> dict:
-    listing: RetailerListing = match_decision.retailer_listing
-    return {
-        "id": match_decision.id,
-        "decision": match_decision.decision.value,
-        "confidence": match_decision.confidence,
-        "matcher": match_decision.matcher,
-        "rationale": match_decision.rationale,
-        "fingerprint": match_decision.fingerprint,
-        "created_at": match_decision.created_at,
-        "retailer_listing": {
-            "id": listing.id,
-            "title": listing.title,
-            "source_url": listing.source_url,
-            "status": listing.status.value,
-            "retailer": V2RetailerSchema.model_validate(listing.retailer).model_dump(),
-            "category": (
-                V2CategorySchema.model_validate(listing.category).model_dump()
-                if listing.category is not None
-                else None
-            ),
-        },
-        "canonical_product": (
-            {
-                "id": str(match_decision.canonical_product.id),
-                "canonical_name": match_decision.canonical_product.canonical_name,
-                "fingerprint": match_decision.canonical_product.fingerprint,
-            }
+def _listing_reference_schema(listing: RetailerListing) -> V2ListingReferenceSchema:
+    return V2ListingReferenceSchema(
+        id=listing.id,
+        title=listing.title,
+        source_url=listing.source_url,
+        status=listing.status.value,
+        retailer=_retailer_schema(listing.retailer),
+        category=_category_schema(listing.category) if listing.category is not None else None,
+    )
+
+
+def _match_decision_schema(match_decision: MatchDecision) -> V2MatchDecisionSchema:
+    return V2MatchDecisionSchema(
+        id=match_decision.id,
+        decision=match_decision.decision.value,
+        confidence=match_decision.confidence,
+        matcher=match_decision.matcher,
+        rationale=match_decision.rationale,
+        fingerprint=match_decision.fingerprint,
+        created_at=match_decision.created_at,
+        retailer_listing=_listing_reference_schema(match_decision.retailer_listing),
+        canonical_product=(
+            _canonical_reference_schema(match_decision.canonical_product)
             if match_decision.canonical_product is not None
             else None
         ),
-        "scrape_run_id": match_decision.scrape_run_id,
-    }
+        scrape_run_id=match_decision.scrape_run_id,
+    )
 
 
-def _serialize_match_candidate(candidate) -> dict:
+def _match_candidate_schema(candidate) -> V2MatchCandidateSchema:
     priced_offers = [offer for offer in candidate.canonical_product.offers if offer.current_price is not None]
     best_price = min((offer.current_price for offer in priced_offers), default=None)
-    return {
-        "canonical_product": {
-            "id": str(candidate.canonical_product.id),
-            "canonical_name": candidate.canonical_product.canonical_name,
-            "fingerprint": candidate.canonical_product.fingerprint,
-        },
-        "category": V2CategorySchema.model_validate(candidate.canonical_product.category).model_dump(),
-        "brand": candidate.canonical_product.brand,
-        "best_price": best_price,
-        "retailer_count": len({offer.retailer_id for offer in candidate.canonical_product.offers}),
-        "score": candidate.score,
-        "reasons": candidate.reasons,
-    }
+    return V2MatchCandidateSchema(
+        canonical_product=_canonical_reference_schema(candidate.canonical_product),
+        category=_category_schema(candidate.canonical_product.category),
+        brand=candidate.canonical_product.brand,
+        best_price=best_price,
+        retailer_count=len({offer.retailer_id for offer in candidate.canonical_product.offers}),
+        score=candidate.score,
+        reasons=candidate.reasons,
+    )
 
 
-def _serialize_product(canonical_product: CanonicalProduct, *, hide_unavailable: bool = True) -> dict:
+def _product_listing_schemas(canonical_product: CanonicalProduct) -> List[V2OfferSchema]:
+    return sorted(
+        [_offer_schema(offer) for offer in canonical_product.offers],
+        key=lambda offer: (
+            offer.current_price is None,
+            offer.current_price if offer.current_price is not None else float("inf"),
+            offer.retailer.name,
+        ),
+    )
+
+
+def _product_summary_schema(
+    canonical_product: CanonicalProduct,
+    *,
+    hide_unavailable: bool = True,
+) -> V2ProductSummarySchema:
     offers = canonical_product.offers
     if hide_unavailable:
         offers = [offer for offer in offers if offer.status == ProductStatus.AVAILABLE and offer.is_active]
@@ -292,29 +310,29 @@ def _serialize_product(canonical_product: CanonicalProduct, *, hide_unavailable:
     all_priced_offers = [offer for offer in canonical_product.offers if offer.current_price is not None]
     best_offer = min(available_offers, key=lambda offer: offer.current_price) if available_offers else None
 
-    return {
-        "id": str(canonical_product.id),
-        "canonical_name": canonical_product.canonical_name,
-        "category": V2CategorySchema.model_validate(canonical_product.category).model_dump(),
-        "brand": canonical_product.brand,
-        "fingerprint": canonical_product.fingerprint,
-        "attributes": canonical_product.attributes or {},
-        "offer_count": len(canonical_product.offers),
-        "available_offer_count": len(available_offers),
-        "best_price": best_offer.current_price if best_offer else None,
-        "best_price_retailer": best_offer.retailer.name if best_offer else None,
-        "price_range_min": min((offer.current_price for offer in all_priced_offers), default=None),
-        "price_range_max": max((offer.current_price for offer in all_priced_offers), default=None),
-        "retailers": sorted({offer.retailer.name for offer in canonical_product.offers}),
-        "listings": sorted(
-            [_serialize_offer(offer) for offer in canonical_product.offers],
-            key=lambda offer: (
-                offer["current_price"] is None,
-                offer["current_price"] if offer["current_price"] is not None else float("inf"),
-                offer["retailer"]["name"],
-            ),
-        ),
-    }
+    return V2ProductSummarySchema(
+        id=str(canonical_product.id),
+        canonical_name=canonical_product.canonical_name,
+        category=_category_schema(canonical_product.category),
+        brand=canonical_product.brand,
+        fingerprint=canonical_product.fingerprint,
+        attributes=canonical_product.attributes or {},
+        offer_count=len(canonical_product.offers),
+        available_offer_count=len(available_offers),
+        best_price=best_offer.current_price if best_offer else None,
+        best_price_retailer=best_offer.retailer.name if best_offer else None,
+        price_range_min=min((offer.current_price for offer in all_priced_offers), default=None),
+        price_range_max=max((offer.current_price for offer in all_priced_offers), default=None),
+        retailers=sorted({offer.retailer.name for offer in canonical_product.offers}),
+    )
+
+
+def _product_detail_schema(canonical_product: CanonicalProduct) -> V2ProductDetailSchema:
+    summary = _product_summary_schema(canonical_product, hide_unavailable=False)
+    return V2ProductDetailSchema(
+        **summary.model_dump(),
+        listings=_product_listing_schemas(canonical_product),
+    )
 
 
 def _load_canonical_products_by_ids(db: Session, product_ids: List[int]) -> List[CanonicalProduct]:
@@ -418,22 +436,6 @@ def _require_persisted_catalog(db: Session) -> None:
         )
 
 
-def _sort_products(products: List[dict], sort_by: str, sort_order: str) -> List[dict]:
-    reverse = sort_order == "desc"
-    if sort_by == "price":
-        return sorted(
-            products,
-            key=lambda product: (
-                product["best_price"] is None,
-                product["best_price"] if product["best_price"] is not None else float("inf"),
-            ),
-            reverse=reverse,
-        )
-    if sort_by == "offers":
-        return sorted(products, key=lambda product: product["available_offer_count"], reverse=reverse)
-    return sorted(products, key=lambda product: product["canonical_name"].lower(), reverse=reverse)
-
-
 def _get_product_or_404(db: Session, product_id: str) -> CanonicalProduct:
     product = db.execute(
         select(CanonicalProduct)
@@ -482,18 +484,17 @@ def list_products(
         sort_order=sort_order,
         hide_unavailable=hide_unavailable,
     )
-    summaries = [
-        V2ProductSummarySchema(**{key: value for key, value in _serialize_product(product, hide_unavailable=hide_unavailable).items() if key != "listings"})
-        for product in products
-    ]
-    return {"total": total, "products": summaries}
+    return V2ProductPageSchema(
+        total=total,
+        products=[_product_summary_schema(product, hide_unavailable=hide_unavailable) for product in products],
+    )
 
 
 @router.get("/products/{product_id}", response_model=V2ProductDetailSchema)
 def get_product(product_id: str, db: Session = Depends(get_db)):
     _require_persisted_catalog(db)
     product = _get_product_or_404(db, product_id)
-    return V2ProductDetailSchema(**_serialize_product(product, hide_unavailable=False))
+    return _product_detail_schema(product)
 
 
 @router.get("/offers", response_model=List[V2OfferSchema])
@@ -508,7 +509,7 @@ def list_offers(
 
     if product_id:
         product = _get_product_or_404(db, product_id)
-        offers = [_serialize_offer(offer) for offer in product.offers]
+        offers = [_offer_schema(offer) for offer in product.offers]
     else:
         query = select(Offer).options(joinedload(Offer.retailer))
         if hide_unavailable:
@@ -516,11 +517,11 @@ def list_offers(
         query = query.order_by(Offer.current_price.asc().nullslast(), Offer.listing_name.asc()).offset(offset)
         if limit is not None:
             query = query.limit(limit)
-        offers = [_serialize_offer(offer) for offer in db.execute(query).scalars().all()]
+        offers = [_offer_schema(offer) for offer in db.execute(query).scalars().all()]
 
     if hide_unavailable:
-        offers = [offer for offer in offers if offer["status"] == ProductStatus.AVAILABLE.value]
-    return [V2OfferSchema(**offer) for offer in offers]
+        offers = [offer for offer in offers if offer.status == ProductStatus.AVAILABLE.value]
+    return offers
 
 
 @router.get("/history", response_model=V2HistoryResponseSchema)
@@ -534,7 +535,7 @@ def get_history(product_id: str, db: Session = Depends(get_db)):
         bucket = series.get(retailer.id)
         if bucket is None:
             bucket = {
-                "retailer": V2RetailerSchema.model_validate(retailer).model_dump(),
+                "retailer": _retailer_schema(retailer),
                 "points": [],
             }
             series[retailer.id] = bucket
@@ -548,7 +549,13 @@ def get_history(product_id: str, db: Session = Depends(get_db)):
                 }
             )
 
-    return {"product_id": product_id, "series": list(series.values())}
+    return V2HistoryResponseSchema(
+        product_id=product_id,
+        series=[
+            V2HistorySeriesSchema(retailer=bucket["retailer"], points=bucket["points"])
+            for bucket in series.values()
+        ],
+    )
 
 
 @router.get("/filters", response_model=V2FiltersResponseSchema)
@@ -578,12 +585,12 @@ def get_filters(
         .join(filtered_products, filtered_products.c.id == CanonicalProduct.id)
         .outerjoin(offer_stats, offer_stats.c.canonical_product_id == CanonicalProduct.id)
     ).one()
-    return {
-        "categories": [V2CategorySchema.model_validate(category).model_dump() for category in categories],
-        "brands": brands,
-        "min_price": min_price,
-        "max_price": max_price,
-    }
+    return V2FiltersResponseSchema(
+        categories=[_category_schema(category) for category in categories],
+        brands=brands,
+        min_price=min_price,
+        max_price=max_price,
+    )
 
 
 @router.get("/trends", response_model=List[V2TrendSchema])
@@ -665,13 +672,13 @@ def get_trends(
         if product is None:
             continue
         trends.append(
-            {
-                "product": V2ProductSummarySchema(**{key: value for key, value in _serialize_product(product).items() if key != "listings"}),
-                "initial_price": row.initial_price,
-                "latest_price": row.latest_price,
-                "price_drop_amount": row.price_drop_amount,
-                "price_drop_percentage": row.price_drop_percentage,
-            }
+            V2TrendSchema(
+                product=_product_summary_schema(product),
+                initial_price=row.initial_price,
+                latest_price=row.latest_price,
+                price_drop_amount=row.price_drop_amount,
+                price_drop_percentage=row.price_drop_percentage,
+            )
         )
     return trends
 
@@ -698,7 +705,7 @@ def list_scrape_runs(
         query = query.where(and_(*filters))
 
     runs = db.execute(query).scalars().all()
-    return [V2ScrapeRunSchema(**_serialize_scrape_run(run)) for run in runs]
+    return [_scrape_run_schema(run) for run in runs]
 
 
 @router.get("/match-decisions", response_model=List[V2MatchDecisionSchema])
@@ -727,7 +734,7 @@ def list_match_decisions(
         query = query.where(and_(*filters))
 
     decisions = db.execute(query).scalars().all()
-    return [V2MatchDecisionSchema(**_serialize_match_decision(item)) for item in decisions]
+    return [_match_decision_schema(item) for item in decisions]
 
 
 @router.get("/match-decisions/{decision_id}/candidates", response_model=List[V2MatchCandidateSchema])
@@ -744,7 +751,7 @@ def list_match_candidates(
         search=search,
         limit=limit,
     )
-    return [V2MatchCandidateSchema(**_serialize_match_candidate(candidate)) for candidate in ranked_candidates]
+    return [_match_candidate_schema(candidate) for candidate in ranked_candidates]
 
 
 @router.patch("/match-decisions/{decision_id}", response_model=V2MatchDecisionSchema)
@@ -791,4 +798,4 @@ def patch_match_decision(
 
     db.commit()
     refreshed = _get_match_decision_or_404(db, decision_id)
-    return V2MatchDecisionSchema(**_serialize_match_decision(refreshed))
+    return _match_decision_schema(refreshed)

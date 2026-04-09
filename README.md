@@ -91,6 +91,7 @@ python -m venv venv
 venv\Scripts\activate
 pip install -r requirements.txt
 copy .env.example .env
+python scripts/init_database.py
 uvicorn backend.app.main:app --reload
 ```
 
@@ -111,6 +112,57 @@ Backend URLs:
 - Match decision resolution: `PATCH http://localhost:8000/api/v2/match-decisions/{id}`
   Requires header `X-API-Key: <REVIEW_API_KEY>`.
 
+Example review resolution request:
+
+```http
+PATCH /api/v2/match-decisions/42 HTTP/1.1
+Host: localhost:8000
+Content-Type: application/json
+X-API-Key: change-me
+
+{
+  "decision": "manual_matched",
+  "canonical_product_id": "123",
+  "rationale": "Confirmed same product after review"
+}
+```
+
+Example response:
+
+```json
+{
+  "id": 42,
+  "decision": "manual_matched",
+  "confidence": 1.0,
+  "matcher": "manual_review",
+  "rationale": "Confirmed same product after review",
+  "fingerprint": "abc123",
+  "created_at": "2026-04-09T12:00:00",
+  "retailer_listing": {
+    "id": 77,
+    "title": "ASUS GeForce RTX 5070 PRIME OC 12GB",
+    "source_url": "https://example.com/product",
+    "status": "available",
+    "retailer": {
+      "id": 1,
+      "name": "Example Retailer",
+      "url": "https://example.com",
+      "logo_url": null
+    },
+    "category": {
+      "id": 3,
+      "name": "Graphics Cards"
+    }
+  },
+  "canonical_product": {
+    "id": "123",
+    "canonical_name": "ASUS GeForce RTX 5070 PRIME OC 12GB",
+    "fingerprint": "abc123"
+  },
+  "scrape_run_id": 10
+}
+```
+
 ### Frontend
 
 ```bash
@@ -118,6 +170,13 @@ cd frontend
 npm install
 copy .env.example .env
 npm run dev
+```
+
+Production build:
+
+```bash
+cd frontend
+npm run build
 ```
 
 Frontend URL:
@@ -149,6 +208,16 @@ Alembic manages the persisted `v2` schema.
 ```bash
 venv\Scripts\activate
 alembic upgrade head
+```
+
+Fresh PostgreSQL bootstrap:
+
+```bash
+copy .env.example .env
+set DATABASE_URL=postgresql://user:password@localhost/pcdealtracker
+venv\Scripts\activate
+alembic upgrade head
+python scripts/init_database.py
 ```
 
 Current `v2` tables created by migration:

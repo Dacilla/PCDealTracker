@@ -104,6 +104,7 @@ class ScorptecV2Scraper(BaseScraper):
         print(f"Scraping product page: {page_url}")
         soup = self.get_page_content(page_url, wait_for_selector="#product-list-detail-wrapper")
         if not soup:
+            self.record_category_error(f"Failed to load {page_url}")
             print(f"Failed to get content from {page_url}")
             return
 
@@ -139,7 +140,7 @@ class ScorptecV2Scraper(BaseScraper):
                 else:
                     self.listings_updated += 1
             except Exception as exc:
-                print(f"  Could not ingest an item into v2. Error: {exc}")
+                self.record_item_error(str(exc))
         self.db_session.commit()
 
     def run(self):
@@ -217,10 +218,11 @@ class ScorptecV2Scraper(BaseScraper):
             finish_scrape_run(
                 self.db_session,
                 self.scrape_run,
-                status=ScrapeRunStatus.SUCCEEDED,
+                status=self.completed_status(),
                 listings_seen=self.listings_seen,
                 listings_created=self.listings_created,
                 listings_updated=self.listings_updated,
+                error_summary=self.error_summary(),
             )
             self.db_session.commit()
         except Exception as exc:
@@ -232,7 +234,7 @@ class ScorptecV2Scraper(BaseScraper):
                 listings_seen=self.listings_seen,
                 listings_created=self.listings_created,
                 listings_updated=self.listings_updated,
-                error_summary=str(exc),
+                error_summary=self.combine_error_summary(str(exc)),
             )
             self.db_session.commit()
             raise

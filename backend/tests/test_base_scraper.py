@@ -36,3 +36,13 @@ def test_get_page_content_uses_month_in_debug_timestamp(monkeypatch, tmp_path):
     assert result is None
     assert scraper.driver.screenshot_filename == "debug_screenshot_20260409_171700.png"
     assert (tmp_path / "debug_page_content_20260409_171700.html").exists()
+
+
+def test_base_scraper_reports_partial_status_and_error_summary():
+    scraper = object.__new__(BaseScraper)
+    scraper.item_errors = 2
+    scraper.category_errors = 1
+
+    assert scraper.completed_status().value == "partial"
+    assert scraper.error_summary() == "1 category/page failures; 2 item failures"
+    assert scraper.combine_error_summary("top-level failure") == "top-level failure; 1 category/page failures; 2 item failures"

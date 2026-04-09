@@ -850,3 +850,158 @@ def test_native_v2_upsert_preserves_manual_match_on_subsequent_scrapes(tmp_path)
     finally:
         session.close()
         engine.dispose()
+
+
+def test_native_v2_upsert_rejects_blank_name_snapshot(tmp_path):
+    database_path = tmp_path / "v2_invalid_snapshot.sqlite3"
+    engine = create_engine(f"sqlite:///{database_path}", connect_args={"check_same_thread": False})
+    SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    Base.metadata.create_all(bind=engine)
+
+    session = SessionLocal()
+    try:
+        retailer = Retailer(name="Test Retailer", url="https://example.com")
+        category = Category(name="Graphics Cards")
+        session.add_all([retailer, category])
+        session.commit()
+
+        scrape_run = start_scrape_run(
+            session,
+            retailer_id=retailer.id,
+            scraper_name="test_invalid_snapshot",
+        )
+
+        try:
+            upsert_v2_listing_snapshot(
+                session,
+                scrape_run=scrape_run,
+                retailer_id=retailer.id,
+                category_id=category.id,
+                category_name=category.name,
+                snapshot=V2ListingSnapshot(
+                    name="   ",
+                    url="https://example.com/blank-name",
+                    price=1000.0,
+                    status=ProductStatus.AVAILABLE,
+                ),
+            )
+            assert False, "Expected ValueError for blank snapshot name"
+        except ValueError as exc:
+            assert str(exc) == "Snapshot name cannot be blank"
+
+        assert session.execute(select(CanonicalProduct)).scalars().all() == []
+        assert session.execute(select(Offer)).scalars().all() == []
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_native_v2_upsert_rejects_suspicious_price_snapshot(tmp_path):
+    database_path = tmp_path / "v2_invalid_price_snapshot.sqlite3"
+    engine = create_engine(f"sqlite:///{database_path}", connect_args={"check_same_thread": False})
+    SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    Base.metadata.create_all(bind=engine)
+
+    session = SessionLocal()
+    try:
+        retailer = Retailer(name="Test Retailer", url="https://example.com")
+        category = Category(name="Graphics Cards")
+        session.add_all([retailer, category])
+        session.commit()
+
+        scrape_run = start_scrape_run(
+            session,
+            retailer_id=retailer.id,
+            scraper_name="test_invalid_price_snapshot",
+        )
+
+        try:
+            upsert_v2_listing_snapshot(
+                session,
+                scrape_run=scrape_run,
+                retailer_id=retailer.id,
+                category_id=category.id,
+                category_name=category.name,
+                snapshot=V2ListingSnapshot(
+                    name="ASUS GeForce RTX 5070 12GB",
+                    url="https://example.com/bad-price",
+                    price=0.0,
+                    status=ProductStatus.AVAILABLE,
+                ),
+            )
+            assert False, "Expected ValueError for suspicious snapshot price"
+        except ValueError as exc:
+            assert "Suspicious snapshot price" in str(exc)
+
+        assert session.execute(select(CanonicalProduct)).scalars().all() == []
+        assert session.execute(select(Offer)).scalars().all() == []
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_native_v2_upsert_keeps_offer_denormalized_fields_in_sync(tmp_path):
+    database_path = tmp_path / "v2_offer_denorm.sqlite3"
+    engine = create_engine(f"sqlite:///{database_path}", connect_args={"check_same_thread": False})
+    SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    Base.metadata.create_all(bind=engine)
+
+    session = SessionLocal()
+    try:
+        retailer = Retailer(name="Test Retailer", url="https://example.com")
+        category = Category(name="Graphics Cards")
+        session.add_all([retailer, category])
+        session.commit()
+
+        scrape_run = start_scrape_run(
+            session,
+            retailer_id=retailer.id,
+            scraper_name="test_offer_denorm",
+        )
+        upsert_v2_listing_snapshot(
+            session,
+            scrape_run=scrape_run,
+            retailer_id=retailer.id,
+            category_id=category.id,
+            category_name=category.name,
+            snapshot=V2ListingSnapshot(
+                name="ASUS GeForce RTX 5070 PRIME OC 12GB",
+                url="https://example.com/asus-5070-prime",
+                price=1299.0,
+                previous_price=1399.0,
+                status=ProductStatus.AVAILABLE,
+            ),
+        )
+        session.commit()
+
+        offer = session.execute(select(Offer)).scalar_one()
+        canonical = session.execute(select(CanonicalProduct)).scalar_one()
+        assert offer.category_id == canonical.category_id == category.id
+        assert offer.previous_price == 1399.0
+
+        second_run = start_scrape_run(
+            session,
+            retailer_id=retailer.id,
+            scraper_name="test_offer_denorm_second",
+        )
+        upsert_v2_listing_snapshot(
+            session,
+            scrape_run=second_run,
+            retailer_id=retailer.id,
+            category_id=category.id,
+            category_name=category.name,
+            snapshot=V2ListingSnapshot(
+                name="ASUS GeForce RTX 5070 PRIME OC 12GB",
+                url="https://example.com/asus-5070-prime",
+                price=1249.0,
+                status=ProductStatus.AVAILABLE,
+            ),
+        )
+        session.commit()
+
+        updated_offer = session.execute(select(Offer)).scalar_one()
+        assert updated_offer.category_id == canonical.category_id == category.id
+        assert updated_offer.previous_price == 1299.0
+    finally:
+        session.close()
+        engine.dispose()

@@ -117,10 +117,15 @@ class JWV2Scraper(BaseScraper):
                         EC.presence_of_element_located((By.CSS_SELECTOR, ".ais-InfiniteHits-list"))
                     )
                 except TimeoutException:
+                    self.record_category_error(f"Initial product list did not load for {category_url}")
                     print("Initial product list did not load. Skipping category.")
                     continue
 
+                show_more_clicks = 0
                 while not self.shutdown_event.is_set():
+                    if show_more_clicks >= self.max_pages:
+                        self.record_category_error(f"Pagination limit reached for {category_url}")
+                        break
                     try:
                         show_more_button = WebDriverWait(self.driver, 5).until(
                             EC.element_to_be_clickable(
@@ -128,12 +133,14 @@ class JWV2Scraper(BaseScraper):
                             )
                         )
                         self.driver.execute_script("arguments[0].click();", show_more_button)
+                        show_more_clicks += 1
                         print("  'Show More' button clicked, waiting for new products...")
                         time.sleep(3)
                     except TimeoutException:
                         print("  No more 'Show More' buttons found or button is disabled.")
                         break
                     except Exception as exc:
+                        self.record_category_error(f"Show More interaction failed for {category_url}: {exc}")
                         print(f"  An error occurred while clicking 'Show More': {exc}")
                         break
 
@@ -161,10 +168,11 @@ class JWV2Scraper(BaseScraper):
             finish_scrape_run(
                 self.db_session,
                 self.scrape_run,
-                status=ScrapeRunStatus.SUCCEEDED,
+                status=self.completed_status(),
                 listings_seen=self.listings_seen,
                 listings_created=self.listings_created,
                 listings_updated=self.listings_updated,
+                error_summary=self.error_summary(),
             )
             self.db_session.commit()
         except Exception as exc:
@@ -176,7 +184,7 @@ class JWV2Scraper(BaseScraper):
                 listings_seen=self.listings_seen,
                 listings_created=self.listings_created,
                 listings_updated=self.listings_updated,
-                error_summary=str(exc),
+                error_summary=self.combine_error_summary(str(exc)),
             )
             self.db_session.commit()
             raise
@@ -205,7 +213,7 @@ class JWV2Scraper(BaseScraper):
                 else:
                     self.listings_updated += 1
             except Exception as exc:
-                print(f"  Could not ingest an item into v2. Error: {exc}")
+                self.record_item_error(str(exc))
         self.db_session.commit()
 
     def close(self):

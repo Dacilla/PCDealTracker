@@ -116,6 +116,7 @@ class ComputerAllianceV2Scraper(BaseScraper):
 
                 soup = self.get_page_content(category_url, wait_for_selector="#PartsPage")
                 if not soup:
+                    self.record_category_error(f"Failed to load {category_url}")
                     print(f"Failed to get content for {category_url}. Skipping category.")
                     continue
 
@@ -138,10 +139,11 @@ class ComputerAllianceV2Scraper(BaseScraper):
             finish_scrape_run(
                 self.db_session,
                 self.scrape_run,
-                status=ScrapeRunStatus.SUCCEEDED,
+                status=self.completed_status(),
                 listings_seen=self.listings_seen,
                 listings_created=self.listings_created,
                 listings_updated=self.listings_updated,
+                error_summary=self.error_summary(),
             )
             self.db_session.commit()
         except Exception as exc:
@@ -153,7 +155,7 @@ class ComputerAllianceV2Scraper(BaseScraper):
                 listings_seen=self.listings_seen,
                 listings_created=self.listings_created,
                 listings_updated=self.listings_updated,
-                error_summary=str(exc),
+                error_summary=self.combine_error_summary(str(exc)),
             )
             self.db_session.commit()
             raise
@@ -182,7 +184,7 @@ class ComputerAllianceV2Scraper(BaseScraper):
                 else:
                     self.listings_updated += 1
             except Exception as exc:
-                print(f"  Could not ingest an item into v2. Error: {exc}")
+                self.record_item_error(str(exc))
         self.db_session.commit()
 
     def close(self):

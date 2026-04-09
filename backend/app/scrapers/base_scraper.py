@@ -10,6 +10,8 @@ import time
 import datetime
 import threading
 
+from ..database import ScrapeRunStatus
+
 # A lock to prevent race conditions during driver initialization
 _driver_lock = threading.Lock()
 
@@ -22,6 +24,9 @@ class BaseScraper:
         self.db_session = db_session
         self.driver = None
         self.shutdown_event = shutdown_event
+        self.item_errors = 0
+        self.category_errors = 0
+        self.max_pages = 100
         
         try:
             # Use a lock to ensure only one thread initializes a driver at a time
@@ -86,6 +91,31 @@ class BaseScraper:
             except Exception as se:
                 print(f"Could not save debug files: {se}")
             return None
+
+    def record_item_error(self, detail: str) -> None:
+        self.item_errors = getattr(self, "item_errors", 0) + 1
+        print(f"  Could not ingest an item into v2. Error: {detail}")
+
+    def record_category_error(self, detail: str) -> None:
+        self.category_errors = getattr(self, "category_errors", 0) + 1
+        print(f"  Category/page scrape issue: {detail}")
+
+    def completed_status(self) -> ScrapeRunStatus:
+        if getattr(self, "item_errors", 0) or getattr(self, "category_errors", 0):
+            return ScrapeRunStatus.PARTIAL
+        return ScrapeRunStatus.SUCCEEDED
+
+    def error_summary(self) -> str | None:
+        parts = []
+        if getattr(self, "category_errors", 0):
+            parts.append(f"{self.category_errors} category/page failures")
+        if getattr(self, "item_errors", 0):
+            parts.append(f"{self.item_errors} item failures")
+        return "; ".join(parts) if parts else None
+
+    def combine_error_summary(self, detail: str | None = None) -> str | None:
+        parts = [part for part in [detail, self.error_summary()] if part]
+        return "; ".join(parts) if parts else None
 
     def run(self):
         raise NotImplementedError("Each scraper must implement the 'run' method.")

@@ -127,6 +127,7 @@ class UmartV2Scraper(BaseScraper):
                 current_url = category_url
                 soup = self.get_page_content(current_url, wait_for_selector=".category_section")
                 if not soup:
+                    self.record_category_error(f"Failed to load {current_url}")
                     print(f"Failed to get initial content for {current_url}. Skipping category.")
                     continue
 
@@ -136,19 +137,26 @@ class UmartV2Scraper(BaseScraper):
                     current_url = max_page_url
                     soup = self.get_page_content(current_url, wait_for_selector=".category_section")
                     if not soup:
+                        self.record_category_error(f"Failed to load {current_url}")
                         print(f"Failed to get content for max page size URL {current_url}. Skipping category.")
                         continue
                 else:
                     print("Already on max page size or link not found. Proceeding with default.")
 
+                page_count = 0
                 while current_url:
                     if self.shutdown_event.is_set():
+                        break
+                    page_count += 1
+                    if page_count > self.max_pages:
+                        self.record_category_error(f"Pagination limit reached for {category_url}")
                         break
 
                     if soup is None:
                         print(f"Scraping page: {current_url}")
                         soup = self.get_page_content(current_url, wait_for_selector=".goods_list")
                         if not soup:
+                            self.record_category_error(f"Failed to load {current_url}")
                             print(f"Failed to get content for {current_url}. Skipping category.")
                             break
 
@@ -182,10 +190,11 @@ class UmartV2Scraper(BaseScraper):
             finish_scrape_run(
                 self.db_session,
                 self.scrape_run,
-                status=ScrapeRunStatus.SUCCEEDED,
+                status=self.completed_status(),
                 listings_seen=self.listings_seen,
                 listings_created=self.listings_created,
                 listings_updated=self.listings_updated,
+                error_summary=self.error_summary(),
             )
             self.db_session.commit()
         except Exception as exc:
@@ -197,7 +206,7 @@ class UmartV2Scraper(BaseScraper):
                 listings_seen=self.listings_seen,
                 listings_created=self.listings_created,
                 listings_updated=self.listings_updated,
-                error_summary=str(exc),
+                error_summary=self.combine_error_summary(str(exc)),
             )
             self.db_session.commit()
             raise
@@ -226,7 +235,7 @@ class UmartV2Scraper(BaseScraper):
                 else:
                     self.listings_updated += 1
             except Exception as exc:
-                print(f"  Could not ingest an item into v2. Error: {exc}")
+                self.record_item_error(str(exc))
         self.db_session.commit()
 
     def close(self):

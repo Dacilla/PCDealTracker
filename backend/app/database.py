@@ -144,12 +144,14 @@ class Offer(Base):
     canonical_product_id: Mapped[int] = mapped_column(ForeignKey("canonical_products.id"), nullable=False, index=True)
     retailer_listing_id: Mapped[int] = mapped_column(ForeignKey("retailer_listings.id"), nullable=False, index=True)
     retailer_id: Mapped[int] = mapped_column(ForeignKey("retailers.id"), nullable=False, index=True)
+    # Denormalized from canonical_product.category_id for cheaper offer/category filtering.
     category_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"), nullable=True, index=True)
     listing_name: Mapped[str] = mapped_column(String(512), nullable=False)
     listing_url: Mapped[str] = mapped_column(String(1024), nullable=False)
     image_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     currency: Mapped[str] = mapped_column(String(8), default="AUD", nullable=False)
     current_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True, index=True)
+    # Duplicated from the latest prior observation for fast UI access to "was $X".
     previous_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     status: Mapped[ProductStatus] = mapped_column(
         SQLAlchemyEnum(ProductStatus, native_enum=False),
