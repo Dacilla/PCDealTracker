@@ -116,6 +116,22 @@ def test_parse_attributes_psu():
     assert attrs["rating"] == "80+ Gold"
     assert attrs["modularity"] == "Fully Modular"
 
+def test_parse_attributes_psu_handles_80_plus_variants():
+    """Tests PSU parsing for explicit 80 Plus variants and PSU category aliases."""
+    name = "be quiet! Straight Power 12 850W 80 Plus Platinum Modular PSU"
+    attrs = parse_product_attributes(name, "PSU")
+
+    assert attrs["wattage"] == 850
+    assert attrs["rating"] == "80+ Platinum"
+
+def test_parse_attributes_psu_handles_plural_category_name():
+    """Tests PSU parsing for pluralised category names."""
+    name = "Corsair RM750e 750W 80PLUS Gold Power Supply Unit"
+    attrs = parse_product_attributes(name, "Computer Power Supplies")
+
+    assert attrs["wattage"] == 750
+    assert attrs["rating"] == "80+ Gold"
+
 def test_parse_attributes_case():
     """Tests attribute parsing for PC Cases."""
     name = "Lian Li PC-O11 Dynamic EVO Mid Tower Case - Black"

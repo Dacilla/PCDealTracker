@@ -16,6 +16,7 @@ class Settings(BaseSettings):
 
     # Scraping settings
     scrape_interval_hours: int = 6
+    scrape_scheduler_enabled: bool = False
     max_concurrent_scrapers: int = 10
     request_delay_seconds: int = 2
 
@@ -25,8 +26,6 @@ class Settings(BaseSettings):
     debug: bool = True
     api_cors_origins: List[str] = Field(
         default_factory=lambda: [
-            "http://localhost:3000",
-            "http://127.0.0.1:3000",
             "http://localhost:5173",
             "http://127.0.0.1:5173",
             "http://localhost:8080",
@@ -40,6 +39,7 @@ class Settings(BaseSettings):
 
     # Security
     secret_key: str = "your-secret-key-here"
+    review_api_key: str = "change-me"
 
     @field_validator("debug", mode="before")
     @classmethod

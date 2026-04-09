@@ -1,3 +1,4 @@
+from fastapi import Header, HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -21,3 +22,9 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def require_review_api_key(x_api_key: str | None = Header(default=None)) -> str:
+    if x_api_key != settings.review_api_key:
+        raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key header.")
+    return x_api_key

@@ -34,6 +34,9 @@ CATEGORY_FINGERPRINT_ATTRS = {
     "cooling": ("type",),
 }
 
+AUTO_MATCH_SCORE_THRESHOLD = 96.0
+REVIEW_QUEUE_SCORE_THRESHOLD = 75.0
+
 @dataclass
 class V2ListingSnapshot:
     name: str
@@ -59,6 +62,17 @@ class CandidateRankResult:
     canonical_product: CanonicalProduct
     score: float
     reasons: list[str]
+
+
+@dataclass
+class MatchResolutionPlan:
+    canonical_product: Optional[CanonicalProduct]
+    decision: MatchDecisionType
+    confidence: Optional[float]
+    matcher: str
+    rationale: str
+    preserve_manual_state: bool = False
+    force_offer_inactive: bool = False
 
 
 def normalize_brand(name: str, brand: Optional[str]) -> Optional[str]:
@@ -157,6 +171,170 @@ def finish_scrape_run(
     return scrape_run
 
 
+def _get_latest_match_decision(db: Session, retailer_listing_id: int) -> MatchDecision | None:
+    return db.execute(
+        select(MatchDecision)
+        .where(MatchDecision.retailer_listing_id == retailer_listing_id)
+        .order_by(MatchDecision.created_at.desc(), MatchDecision.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def _rank_candidates_for_listing(
+    db: Session,
+    *,
+    listing: RetailerListing,
+    category_name: str,
+) -> list[CandidateRankResult]:
+    query = (
+        select(CanonicalProduct)
+        .options(selectinload(CanonicalProduct.offers))
+        .where(CanonicalProduct.is_active.is_(True))
+    )
+    if listing.category_id is not None:
+        query = query.where(CanonicalProduct.category_id == listing.category_id)
+
+    candidates = db.execute(query).scalars().unique().all()
+    ranked = [
+        _score_canonical_candidate(listing=listing, category_name=category_name, canonical_product=candidate)
+        for candidate in candidates
+    ]
+    ranked.sort(
+        key=lambda item: (
+            item.score,
+            len(item.canonical_product.offers),
+            item.canonical_product.canonical_name.lower(),
+        ),
+        reverse=True,
+    )
+    return ranked
+
+
+def _plan_match_resolution(
+    db: Session,
+    *,
+    listing: RetailerListing,
+    category_name: str,
+    exact_canonical: Optional[CanonicalProduct],
+    latest_decision: Optional[MatchDecision],
+) -> MatchResolutionPlan:
+    if latest_decision is not None:
+        if latest_decision.decision == MatchDecisionType.MANUAL_MATCHED and latest_decision.canonical_product_id is not None:
+            manual_canonical = db.get(CanonicalProduct, latest_decision.canonical_product_id)
+            if manual_canonical is not None:
+                return MatchResolutionPlan(
+                    canonical_product=manual_canonical,
+                    decision=MatchDecisionType.MANUAL_MATCHED,
+                    confidence=1.0,
+                    matcher="manual_review",
+                    rationale=latest_decision.rationale or "Preserved manual canonical assignment during ingestion",
+                    preserve_manual_state=True,
+                )
+        if latest_decision.decision == MatchDecisionType.MANUAL_REJECTED:
+            return MatchResolutionPlan(
+                canonical_product=exact_canonical,
+                decision=MatchDecisionType.MANUAL_REJECTED,
+                confidence=1.0,
+                matcher="manual_review",
+                rationale=latest_decision.rationale or "Preserved manual rejection during ingestion",
+                preserve_manual_state=True,
+                force_offer_inactive=True,
+            )
+        if latest_decision.decision == MatchDecisionType.NEEDS_REVIEW:
+            return MatchResolutionPlan(
+                canonical_product=exact_canonical,
+                decision=MatchDecisionType.NEEDS_REVIEW,
+                confidence=latest_decision.confidence,
+                matcher=latest_decision.matcher or "candidate_rank",
+                rationale=latest_decision.rationale or "Awaiting manual review",
+            )
+
+    if exact_canonical is not None:
+        return MatchResolutionPlan(
+            canonical_product=exact_canonical,
+            decision=MatchDecisionType.AUTO_MATCHED,
+            confidence=1.0,
+            matcher="fingerprint",
+            rationale="Matched during native v2 ingestion using deterministic fingerprint grouping",
+        )
+
+    ranked_candidates = _rank_candidates_for_listing(db, listing=listing, category_name=category_name)
+    best_candidate = ranked_candidates[0] if ranked_candidates else None
+    if best_candidate is not None and best_candidate.score >= AUTO_MATCH_SCORE_THRESHOLD:
+        return MatchResolutionPlan(
+            canonical_product=best_candidate.canonical_product,
+            decision=MatchDecisionType.AUTO_MATCHED,
+            confidence=round(best_candidate.score / 100.0, 3),
+            matcher="candidate_rank",
+            rationale=f"Automatically matched using ranked candidate score {best_candidate.score}",
+        )
+    if best_candidate is not None and best_candidate.score >= REVIEW_QUEUE_SCORE_THRESHOLD:
+        return MatchResolutionPlan(
+            canonical_product=None,
+            decision=MatchDecisionType.NEEDS_REVIEW,
+            confidence=round(best_candidate.score / 100.0, 3),
+            matcher="candidate_rank",
+            rationale=f"Queued for manual review after candidate score {best_candidate.score}",
+        )
+
+    return MatchResolutionPlan(
+        canonical_product=None,
+        decision=MatchDecisionType.AUTO_MATCHED,
+        confidence=1.0,
+        matcher="fingerprint",
+        rationale="Created a new canonical product because no sufficiently similar candidate existed",
+    )
+
+
+def _persist_match_decision(
+    db: Session,
+    *,
+    scrape_run: ScrapeRun,
+    listing: RetailerListing,
+    canonical_product: Optional[CanonicalProduct],
+    decision: MatchDecisionType,
+    confidence: Optional[float],
+    matcher: str,
+    rationale: str,
+    fingerprint: str,
+) -> MatchDecision:
+    existing_decision = _get_latest_match_decision(db, listing.id)
+    canonical_product_id = canonical_product.id if canonical_product is not None else None
+
+    if existing_decision is not None and existing_decision.decision in (
+        MatchDecisionType.MANUAL_MATCHED,
+        MatchDecisionType.MANUAL_REJECTED,
+    ):
+        existing_decision.scrape_run_id = scrape_run.id
+        existing_decision.fingerprint = fingerprint
+        return existing_decision
+
+    if (
+        existing_decision is not None
+        and existing_decision.decision == decision
+        and existing_decision.canonical_product_id == canonical_product_id
+    ):
+        existing_decision.scrape_run_id = scrape_run.id
+        existing_decision.confidence = confidence
+        existing_decision.matcher = matcher
+        existing_decision.rationale = rationale
+        existing_decision.fingerprint = fingerprint
+        return existing_decision
+
+    decision_row = MatchDecision(
+        retailer_listing_id=listing.id,
+        canonical_product_id=canonical_product_id,
+        scrape_run_id=scrape_run.id,
+        decision=decision,
+        confidence=confidence,
+        matcher=matcher,
+        rationale=rationale,
+        fingerprint=fingerprint,
+    )
+    db.add(decision_row)
+    return decision_row
+
+
 def upsert_v2_listing_snapshot(
     db: Session,
     *,
@@ -219,12 +397,22 @@ def upsert_v2_listing_snapshot(
         listing.status = snapshot.status
         listing.last_seen_at = utcnow_naive()
 
-    canonical_product = db.execute(
+    latest_decision = _get_latest_match_decision(db, listing.id)
+    exact_canonical = db.execute(
         select(CanonicalProduct).where(
             CanonicalProduct.category_id == category_id,
             CanonicalProduct.fingerprint == fingerprint,
         )
     ).scalar_one_or_none()
+    resolution_plan = _plan_match_resolution(
+        db,
+        listing=listing,
+        category_name=category_name,
+        exact_canonical=exact_canonical,
+        latest_decision=latest_decision,
+    )
+
+    canonical_product = resolution_plan.canonical_product
     canonical_created = canonical_product is None
     if canonical_product is None:
         canonical_product = CanonicalProduct(
@@ -281,6 +469,9 @@ def upsert_v2_listing_snapshot(
         offer.is_active = snapshot.status == ProductStatus.AVAILABLE
         offer.last_seen_at = utcnow_naive()
 
+    if resolution_plan.force_offer_inactive:
+        offer.is_active = False
+
     observation_created = False
     latest_observation = db.execute(
         select(PriceObservation)
@@ -310,18 +501,22 @@ def upsert_v2_listing_snapshot(
         )
         observation_created = True
 
-    db.add(
-        MatchDecision(
-            retailer_listing_id=listing.id,
-            canonical_product_id=canonical_product.id,
-            scrape_run_id=scrape_run.id,
-            decision=MatchDecisionType.AUTO_MATCHED,
-            confidence=1.0,
-            matcher="fingerprint",
-            rationale="Matched during native v2 ingestion using deterministic fingerprint grouping",
-            fingerprint=fingerprint,
-        )
+    _persist_match_decision(
+        db,
+        scrape_run=scrape_run,
+        listing=listing,
+        canonical_product=(
+            canonical_product
+            if resolution_plan.decision != MatchDecisionType.NEEDS_REVIEW
+            else None
+        ),
+        decision=resolution_plan.decision,
+        confidence=resolution_plan.confidence,
+        matcher=resolution_plan.matcher,
+        rationale=resolution_plan.rationale,
+        fingerprint=fingerprint,
     )
+
     db.flush()
     return UpsertResult(
         listing_created=listing_created,

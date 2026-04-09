@@ -12,6 +12,7 @@ import type {
 
 const DEFAULT_BASE = "http://localhost:8000";
 const API_BASE = `${(import.meta.env.VITE_API_BASE_URL || DEFAULT_BASE).replace(/\/$/, "")}/api/v2`;
+const REVIEW_API_KEY = `${import.meta.env.VITE_REVIEW_API_KEY || ""}`.trim();
 
 async function fetchJson<T>(path: string, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
   const url = new URL(`${API_BASE}${path}`);
@@ -34,11 +35,16 @@ async function fetchJson<T>(path: string, params?: Record<string, string | numbe
 }
 
 async function sendJson<T>(method: "PATCH", path: string, body: unknown): Promise<T> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json"
+  };
+  if (REVIEW_API_KEY) {
+    headers["X-API-Key"] = REVIEW_API_KEY;
+  }
+
   const response = await fetch(`${API_BASE}${path}`, {
     method,
-    headers: {
-      "Content-Type": "application/json"
-    },
+    headers,
     body: JSON.stringify(body)
   });
 

@@ -71,7 +71,7 @@ class BaseScraper:
             print(f"Error fetching or waiting for content at {url or self.driver.current_url}.")
             print(f"Underlying error: {e}")
             
-            timestamp = datetime.datetime.now().strftime("%Ym%d_%H%M%S")
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             screenshot_filename = f"debug_screenshot_{timestamp}.png"
             html_filename = f"debug_page_content_{timestamp}.html"
             

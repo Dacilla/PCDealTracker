@@ -7,6 +7,7 @@ from backend.app.database import (
     CanonicalProduct,
     Category,
     MatchDecision,
+    MatchDecisionType,
     Offer,
     PriceObservation,
     ProductStatus,
@@ -24,6 +25,7 @@ from backend.app.services.v2_catalog import (
     V2ListingSnapshot,
     finish_scrape_run,
     mark_missing_retailer_urls_unavailable,
+    resolve_match_decision,
     start_scrape_run,
     upsert_v2_listing_snapshot,
 )
@@ -268,7 +270,8 @@ def test_native_v2_upsert_and_unavailable_marking(tmp_path):
         assert canonical.canonical_name == "ASUS GeForce RTX 5070 PRIME OC 12GB"
         assert offer.current_price == 1249.0
         assert len(observations) == 2
-        assert len(decisions) == 2
+        assert len(decisions) == 1
+        assert decisions[0].scrape_run_id == scrape_run.id
 
         missing_run = start_scrape_run(
             session,
@@ -695,6 +698,155 @@ def test_native_v2_upsert_for_pccg_snapshot(tmp_path):
         assert canonical.attributes["series"] == "RTX"
         assert offer.current_price == 1219.0
         assert decision.matcher == "fingerprint"
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_native_v2_upsert_creates_review_queue_item_for_ambiguous_candidate(tmp_path):
+    database_path = tmp_path / "v2_review_queue.sqlite3"
+    engine = create_engine(f"sqlite:///{database_path}", connect_args={"check_same_thread": False})
+    SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    Base.metadata.create_all(bind=engine)
+
+    session = SessionLocal()
+    try:
+        retailer = Retailer(name="Test Retailer", url="https://example.com")
+        category = Category(name="Graphics Cards")
+        session.add_all([retailer, category])
+        session.commit()
+
+        existing_canonical = CanonicalProduct(
+            canonical_name="ASUS GeForce RTX 5070 Ti 16GB",
+            category_id=category.id,
+            brand="ASUS",
+            model_key="rtx 5070 ti 16",
+            fingerprint="existing-5070-ti-16",
+            attributes={"series": "RTX", "vram_gb": 16},
+        )
+        session.add(existing_canonical)
+        session.commit()
+
+        scrape_run = start_scrape_run(
+            session,
+            retailer_id=retailer.id,
+            scraper_name="test_review_queue",
+        )
+
+        result = upsert_v2_listing_snapshot(
+            session,
+            scrape_run=scrape_run,
+            retailer_id=retailer.id,
+            category_id=category.id,
+            category_name=category.name,
+            snapshot=V2ListingSnapshot(
+                name="ASUS GeForce RTX 5070 Ti OC 16GB",
+                url="https://example.com/asus-5070-ti-oc",
+                price=1299.0,
+                status=ProductStatus.AVAILABLE,
+            ),
+        )
+        session.commit()
+
+        canonicals = session.execute(select(CanonicalProduct).order_by(CanonicalProduct.id.asc())).scalars().all()
+        offer = session.execute(select(Offer)).scalar_one()
+        decision = session.execute(select(MatchDecision)).scalar_one()
+
+        assert result.canonical_created is True
+        assert len(canonicals) == 2
+        assert offer.canonical_product_id == canonicals[-1].id
+        assert decision.decision == MatchDecisionType.NEEDS_REVIEW
+        assert decision.canonical_product_id is None
+        assert decision.matcher == "candidate_rank"
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_native_v2_upsert_preserves_manual_match_on_subsequent_scrapes(tmp_path):
+    database_path = tmp_path / "v2_manual_match_preserved.sqlite3"
+    engine = create_engine(f"sqlite:///{database_path}", connect_args={"check_same_thread": False})
+    SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    Base.metadata.create_all(bind=engine)
+
+    session = SessionLocal()
+    try:
+        retailer = Retailer(name="Test Retailer", url="https://example.com")
+        category = Category(name="Graphics Cards")
+        session.add_all([retailer, category])
+        session.commit()
+
+        canonical_target = CanonicalProduct(
+            canonical_name="ASUS GeForce RTX 5070 Ti 16GB",
+            category_id=category.id,
+            brand="ASUS",
+            model_key="rtx 5070 ti 16",
+            fingerprint="existing-5070-ti-16",
+            attributes={"series": "RTX", "vram_gb": 16},
+        )
+        session.add(canonical_target)
+        session.commit()
+
+        scrape_run = start_scrape_run(
+            session,
+            retailer_id=retailer.id,
+            scraper_name="test_manual_match_preserved",
+        )
+        upsert_v2_listing_snapshot(
+            session,
+            scrape_run=scrape_run,
+            retailer_id=retailer.id,
+            category_id=category.id,
+            category_name=category.name,
+            snapshot=V2ListingSnapshot(
+                name="ASUS GeForce RTX 5070 Ti OC 16GB",
+                url="https://example.com/asus-5070-ti-oc",
+                price=1299.0,
+                status=ProductStatus.AVAILABLE,
+            ),
+        )
+        session.commit()
+
+        review_decision = session.execute(select(MatchDecision)).scalar_one()
+        resolve_match_decision(
+            session,
+            match_decision=review_decision,
+            decision=MatchDecisionType.MANUAL_MATCHED,
+            canonical_product=canonical_target,
+            rationale="Confirmed exact same GPU",
+        )
+        session.commit()
+
+        second_run = start_scrape_run(
+            session,
+            retailer_id=retailer.id,
+            scraper_name="test_manual_match_preserved_second",
+        )
+        upsert_v2_listing_snapshot(
+            session,
+            scrape_run=second_run,
+            retailer_id=retailer.id,
+            category_id=category.id,
+            category_name=category.name,
+            snapshot=V2ListingSnapshot(
+                name="ASUS GeForce RTX 5070 Ti OC 16GB",
+                url="https://example.com/asus-5070-ti-oc",
+                price=1249.0,
+                status=ProductStatus.AVAILABLE,
+            ),
+        )
+        session.commit()
+
+        latest_decision = session.execute(
+            select(MatchDecision).order_by(MatchDecision.id.desc())
+        ).scalars().first()
+        offer = session.execute(select(Offer)).scalar_one()
+
+        assert latest_decision.decision == MatchDecisionType.MANUAL_MATCHED
+        assert latest_decision.canonical_product_id == canonical_target.id
+        assert offer.canonical_product_id == canonical_target.id
+        assert offer.current_price == 1249.0
+        assert offer.is_active is True
     finally:
         session.close()
         engine.dispose()

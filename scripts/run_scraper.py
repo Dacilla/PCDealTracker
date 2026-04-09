@@ -66,25 +66,31 @@ def run_scraper_batch(shutdown_event: threading.Event, scraper_funcs, *, batch_l
                 print(f"\n--- {scraper_name} Generated an Exception: {exc} ---")
 
 
+def run_native_v2_pipeline(shutdown_event: threading.Event | None = None) -> None:
+    active_shutdown_event = shutdown_event or threading.Event()
+
+    try:
+        print("--- Initializing Database ---")
+        setup_database()
+        print("--- Database Initialization Complete ---")
+        run_scraper_batch(active_shutdown_event, NATIVE_V2_SCRAPERS, batch_label="Native V2 Scrapers")
+    except KeyboardInterrupt:
+        print("\n\nKeyboard interrupt received. Signaling scrapers to shut down...")
+        active_shutdown_event.set()
+    finally:
+        print("\n--- Scrape Pipeline Execution Complete ---")
+
+    if not active_shutdown_event.is_set():
+        clear_all_cache()
+
+
 def main(argv=None):
     parser = build_arg_parser()
     parser.parse_args(argv)
 
     shutdown_event = threading.Event()
 
-    try:
-        print("--- Initializing Database ---")
-        setup_database()
-        print("--- Database Initialization Complete ---")
-        run_scraper_batch(shutdown_event, NATIVE_V2_SCRAPERS, batch_label="Native V2 Scrapers")
-    except KeyboardInterrupt:
-        print("\n\nKeyboard interrupt received. Signaling scrapers to shut down...")
-        shutdown_event.set()
-    finally:
-        print("\n--- Scrape Pipeline Execution Complete ---")
-
-    if not shutdown_event.is_set():
-        clear_all_cache()
+    run_native_v2_pipeline(shutdown_event)
 
 
 if __name__ == "__main__":

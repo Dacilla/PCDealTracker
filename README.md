@@ -94,6 +94,14 @@ copy .env.example .env
 uvicorn backend.app.main:app --reload
 ```
 
+Important backend env vars:
+
+- `DATABASE_URL`
+- `API_CORS_ORIGINS`
+- `SCRAPE_SCHEDULER_ENABLED` to enable periodic scraper execution inside the API process
+- `SCRAPE_INTERVAL_HOURS` for the scheduler cadence
+- `REVIEW_API_KEY` for protected review mutations
+
 Backend URLs:
 
 - API docs: `http://localhost:8000/docs`
@@ -101,18 +109,25 @@ Backend URLs:
 - Scrape runs: `http://localhost:8000/api/v2/scrape-runs`
 - Match decisions: `http://localhost:8000/api/v2/match-decisions`
 - Match decision resolution: `PATCH http://localhost:8000/api/v2/match-decisions/{id}`
+  Requires header `X-API-Key: <REVIEW_API_KEY>`.
 
 ### Frontend
 
 ```bash
 cd frontend
 npm install
+copy .env.example .env
 npm run dev
 ```
 
 Frontend URL:
 
 - `http://localhost:5173`
+
+Important frontend env vars:
+
+- `VITE_API_BASE_URL` defaults to `http://localhost:8000`
+- `VITE_REVIEW_API_KEY` must match backend `REVIEW_API_KEY` for review actions
 
 ## Docker
 

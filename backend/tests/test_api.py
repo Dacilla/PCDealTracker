@@ -337,6 +337,15 @@ def test_v2_products_sort_by_price_desc(client, populate_db):
     assert prices == [950.0, 600.0]
 
 
+def test_v2_products_pagination(client, populate_db):
+    response = client.get("/api/v2/products", params={"page": 1, "page_size": 1, "sort_by": "name"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 2
+    assert len(data["products"]) == 1
+    assert data["products"][0]["canonical_name"] == "AMD Ryzen 7 7800X3D"
+
+
 def test_v2_products_can_show_unavailable_entries(client, populate_db):
     gpu_id = populate_db["cat_gpu_id"]
     response = client.get("/api/v2/products", params={"category_id": gpu_id, "hide_unavailable": "false"})
@@ -354,6 +363,14 @@ def test_v2_product_detail_and_history(client, populate_db):
     history = client.get("/api/v2/history", params={"product_id": populate_db["gpu_product_id"]})
     assert history.status_code == 200
     assert len(history.json()["series"]) == 2
+
+
+def test_v2_offers_support_limit_and_offset(client, populate_db):
+    response = client.get("/api/v2/offers", params={"limit": 1, "offset": 1})
+    assert response.status_code == 200
+    offers = response.json()
+    assert len(offers) == 1
+    assert offers[0]["current_price"] == 950.0
 
 
 def test_v2_filters(client, populate_db):
@@ -425,6 +442,7 @@ def test_v2_match_decision_manual_match_updates_offer_assignment(client, populat
             "canonical_product_id": populate_db["gpu_product_id"],
             "rationale": "Reviewed and matched manually",
         },
+        headers={"X-API-Key": "change-me"},
     )
     assert response.status_code == 200
     data = response.json()
@@ -452,6 +470,7 @@ def test_v2_match_decision_manual_reject_deactivates_offer(client, populate_db, 
             "decision": "manual_rejected",
             "rationale": "Reviewed and rejected manually",
         },
+        headers={"X-API-Key": "change-me"},
     )
     assert response.status_code == 200
     data = response.json()
@@ -477,6 +496,19 @@ def test_v2_match_decision_manual_match_rejects_mismatched_category(client, popu
             "decision": "manual_matched",
             "canonical_product_id": populate_db["cpu_product_id"],
         },
+        headers={"X-API-Key": "change-me"},
     )
     assert response.status_code == 400
     assert response.json()["detail"] == "Canonical product category must match the listing category."
+
+
+def test_v2_match_decision_patch_requires_api_key(client, populate_db):
+    response = client.patch(
+        f"/api/v2/match-decisions/{populate_db['review_decision_id']}",
+        json={
+            "decision": "manual_rejected",
+            "rationale": "Rejected without auth",
+        },
+    )
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid or missing X-API-Key header."

@@ -3,7 +3,7 @@ from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import and_, select
+from sqlalchemy import and_, case, func, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from ..database import (
@@ -18,7 +18,7 @@ from ..database import (
     ScrapeRun,
     ScrapeRunStatus,
 )
-from ..dependencies import get_db
+from ..dependencies import get_db, require_review_api_key
 from ..services.v2_catalog import rank_match_candidates, resolve_match_decision
 
 
@@ -162,6 +162,35 @@ class V2MatchCandidateSchema(BaseModel):
 router = APIRouter(prefix="/api/v2", tags=["V2"])
 
 
+def _canonical_product_load_options():
+    return (
+        joinedload(CanonicalProduct.category),
+        selectinload(CanonicalProduct.offers).joinedload(Offer.retailer),
+        selectinload(CanonicalProduct.offers).joinedload(Offer.category),
+        selectinload(CanonicalProduct.offers).selectinload(Offer.price_observations),
+    )
+
+
+def _offer_stats_subquery():
+    available_with_price = and_(
+        Offer.status == ProductStatus.AVAILABLE,
+        Offer.is_active.is_(True),
+        Offer.current_price.is_not(None),
+    )
+    return (
+        select(
+            Offer.canonical_product_id.label("canonical_product_id"),
+            func.count(Offer.id).label("offer_count"),
+            func.sum(case((Offer.current_price.is_not(None), 1), else_=0)).label("priced_offer_count"),
+            func.sum(case((available_with_price, 1), else_=0)).label("available_offer_count"),
+            func.min(case((Offer.current_price.is_not(None), Offer.current_price), else_=None)).label("min_any_price"),
+            func.min(case((available_with_price, Offer.current_price), else_=None)).label("min_available_price"),
+        )
+        .group_by(Offer.canonical_product_id)
+        .subquery()
+    )
+
+
 def _serialize_offer(offer: Offer) -> dict:
     return {
         "id": offer.id,
@@ -288,32 +317,96 @@ def _serialize_product(canonical_product: CanonicalProduct, *, hide_unavailable:
     }
 
 
-def _load_canonical_products(
-    db: Session,
+def _load_canonical_products_by_ids(db: Session, product_ids: List[int]) -> List[CanonicalProduct]:
+    if not product_ids:
+        return []
+
+    products = db.execute(
+        select(CanonicalProduct)
+        .options(*_canonical_product_load_options())
+        .where(CanonicalProduct.id.in_(product_ids))
+    ).scalars().unique().all()
+    products_by_id = {product.id: product for product in products}
+    return [products_by_id[product_id] for product_id in product_ids if product_id in products_by_id]
+
+
+def _product_id_query(
     *,
     search: Optional[str] = None,
     category_id: Optional[int] = None,
-) -> List[CanonicalProduct]:
+    hide_unavailable: bool = True,
+):
+    offer_stats = _offer_stats_subquery()
     query = (
-        select(CanonicalProduct)
-        .options(
-            joinedload(CanonicalProduct.category),
-            selectinload(CanonicalProduct.offers).joinedload(Offer.retailer),
-            selectinload(CanonicalProduct.offers).joinedload(Offer.category),
-            selectinload(CanonicalProduct.offers).selectinload(Offer.price_observations),
-        )
+        select(CanonicalProduct.id)
+        .outerjoin(offer_stats, offer_stats.c.canonical_product_id == CanonicalProduct.id)
         .where(CanonicalProduct.is_active.is_(True))
     )
 
-    filters = []
     if search:
-        filters.append(CanonicalProduct.canonical_name.ilike(f"%{search}%"))
-    if category_id:
-        filters.append(CanonicalProduct.category_id == category_id)
-    if filters:
-        query = query.where(and_(*filters))
+        query = query.where(CanonicalProduct.canonical_name.ilike(f"%{search}%"))
+    if category_id is not None:
+        query = query.where(CanonicalProduct.category_id == category_id)
+    if hide_unavailable:
+        query = query.where(func.coalesce(offer_stats.c.available_offer_count, 0) > 0)
 
-    return db.execute(query.order_by(CanonicalProduct.canonical_name.asc())).scalars().unique().all()
+    return query, offer_stats
+
+
+def _product_sort_expressions(*, sort_by: str, sort_order: str, hide_unavailable: bool, offer_stats):
+    if sort_by == "price":
+        price_column = (
+            offer_stats.c.min_available_price if hide_unavailable else offer_stats.c.min_any_price
+        )
+        ordered_price = price_column.desc().nullslast() if sort_order == "desc" else price_column.asc().nullslast()
+        return [ordered_price, CanonicalProduct.canonical_name.asc()]
+    if sort_by == "offers":
+        count_column = (
+            offer_stats.c.available_offer_count if hide_unavailable else offer_stats.c.priced_offer_count
+        )
+        ordered_count = count_column.desc().nullslast() if sort_order == "desc" else count_column.asc().nullslast()
+        return [ordered_count, CanonicalProduct.canonical_name.asc()]
+
+    ordered_name = (
+        CanonicalProduct.canonical_name.desc() if sort_order == "desc" else CanonicalProduct.canonical_name.asc()
+    )
+    return [ordered_name]
+
+
+def _load_product_page(
+    db: Session,
+    *,
+    page: int,
+    page_size: int,
+    search: Optional[str],
+    category_id: Optional[int],
+    sort_by: str,
+    sort_order: str,
+    hide_unavailable: bool,
+) -> tuple[int, List[CanonicalProduct]]:
+    product_id_query, offer_stats = _product_id_query(
+        search=search,
+        category_id=category_id,
+        hide_unavailable=hide_unavailable,
+    )
+    total = db.execute(
+        select(func.count()).select_from(product_id_query.order_by(None).subquery())
+    ).scalar_one()
+
+    offset = max(page - 1, 0) * page_size
+    ordered_product_ids = db.execute(
+        product_id_query
+        .order_by(*_product_sort_expressions(
+            sort_by=sort_by,
+            sort_order=sort_order,
+            hide_unavailable=hide_unavailable,
+            offer_stats=offer_stats,
+        ))
+        .offset(offset)
+        .limit(page_size)
+    ).scalars().all()
+
+    return total, _load_canonical_products_by_ids(db, ordered_product_ids)
 
 
 def _require_persisted_catalog(db: Session) -> None:
@@ -344,11 +437,7 @@ def _sort_products(products: List[dict], sort_by: str, sort_order: str) -> List[
 def _get_product_or_404(db: Session, product_id: str) -> CanonicalProduct:
     product = db.execute(
         select(CanonicalProduct)
-        .options(
-            joinedload(CanonicalProduct.category),
-            selectinload(CanonicalProduct.offers).joinedload(Offer.retailer),
-            selectinload(CanonicalProduct.offers).selectinload(Offer.price_observations),
-        )
+        .options(*_canonical_product_load_options())
         .where(CanonicalProduct.id == int(product_id))
     ).scalars().unique().first()
     if not product:
@@ -383,15 +472,21 @@ def list_products(
     hide_unavailable: bool = Query(True),
 ):
     _require_persisted_catalog(db)
-    products = [_serialize_product(product, hide_unavailable=hide_unavailable) for product in _load_canonical_products(db, search=search, category_id=category_id)]
-    if hide_unavailable:
-        products = [product for product in products if product["available_offer_count"] > 0]
-
-    products = _sort_products(products, sort_by, sort_order)
-    start = max(page - 1, 0) * page_size
-    end = start + page_size
-    summaries = [V2ProductSummarySchema(**{key: value for key, value in product.items() if key != "listings"}) for product in products[start:end]]
-    return {"total": len(products), "products": summaries}
+    total, products = _load_product_page(
+        db,
+        page=page,
+        page_size=page_size,
+        search=search,
+        category_id=category_id,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        hide_unavailable=hide_unavailable,
+    )
+    summaries = [
+        V2ProductSummarySchema(**{key: value for key, value in _serialize_product(product, hide_unavailable=hide_unavailable).items() if key != "listings"})
+        for product in products
+    ]
+    return {"total": total, "products": summaries}
 
 
 @router.get("/products/{product_id}", response_model=V2ProductDetailSchema)
@@ -406,6 +501,8 @@ def list_offers(
     db: Session = Depends(get_db),
     product_id: Optional[str] = Query(None),
     hide_unavailable: bool = Query(True),
+    limit: Optional[int] = Query(None, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ):
     _require_persisted_catalog(db)
 
@@ -413,7 +510,12 @@ def list_offers(
         product = _get_product_or_404(db, product_id)
         offers = [_serialize_offer(offer) for offer in product.offers]
     else:
-        query = select(Offer).options(joinedload(Offer.retailer)).order_by(Offer.current_price.asc().nullslast(), Offer.listing_name.asc())
+        query = select(Offer).options(joinedload(Offer.retailer))
+        if hide_unavailable:
+            query = query.where(Offer.status == ProductStatus.AVAILABLE)
+        query = query.order_by(Offer.current_price.asc().nullslast(), Offer.listing_name.asc()).offset(offset)
+        if limit is not None:
+            query = query.limit(limit)
         offers = [_serialize_offer(offer) for offer in db.execute(query).scalars().all()]
 
     if hide_unavailable:
@@ -457,16 +559,30 @@ def get_filters(
     _require_persisted_catalog(db)
 
     categories = db.execute(select(Category).order_by(Category.name.asc())).scalars().all()
-    products = [_serialize_product(product) for product in _load_canonical_products(db, category_id=category_id)]
-    products = [product for product in products if product["available_offer_count"] > 0]
+    product_id_query, offer_stats = _product_id_query(category_id=category_id, hide_unavailable=True)
+    filtered_products = product_id_query.order_by(None).subquery()
 
-    brands = sorted({product["brand"] for product in products if product["brand"]})
-    prices = [product["best_price"] for product in products if product["best_price"] is not None]
+    brands = db.execute(
+        select(CanonicalProduct.brand)
+        .join(filtered_products, filtered_products.c.id == CanonicalProduct.id)
+        .where(CanonicalProduct.brand.is_not(None))
+        .distinct()
+        .order_by(CanonicalProduct.brand.asc())
+    ).scalars().all()
+    min_price, max_price = db.execute(
+        select(
+            func.min(offer_stats.c.min_available_price),
+            func.max(offer_stats.c.min_available_price),
+        )
+        .select_from(CanonicalProduct)
+        .join(filtered_products, filtered_products.c.id == CanonicalProduct.id)
+        .outerjoin(offer_stats, offer_stats.c.canonical_product_id == CanonicalProduct.id)
+    ).one()
     return {
         "categories": [V2CategorySchema.model_validate(category).model_dump() for category in categories],
         "brands": brands,
-        "min_price": min(prices) if prices else None,
-        "max_price": max(prices) if prices else None,
+        "min_price": min_price,
+        "max_price": max_price,
     }
 
 
@@ -479,42 +595,85 @@ def get_trends(
     _require_persisted_catalog(db)
 
     since = datetime.datetime.now(datetime.UTC).replace(tzinfo=None) - datetime.timedelta(days=days)
+    observation_rankings = (
+        select(
+            Offer.canonical_product_id.label("canonical_product_id"),
+            PriceObservation.price.label("price"),
+            func.row_number().over(
+                partition_by=Offer.canonical_product_id,
+                order_by=(PriceObservation.observed_at.asc(), PriceObservation.id.asc()),
+            ).label("first_rank"),
+            func.row_number().over(
+                partition_by=Offer.canonical_product_id,
+                order_by=(PriceObservation.observed_at.desc(), PriceObservation.id.desc()),
+            ).label("last_rank"),
+        )
+        .join(Offer, Offer.id == PriceObservation.offer_id)
+        .join(CanonicalProduct, CanonicalProduct.id == Offer.canonical_product_id)
+        .where(
+            CanonicalProduct.is_active.is_(True),
+            PriceObservation.observed_at >= since,
+        )
+        .subquery()
+    )
+    first_prices = (
+        select(
+            observation_rankings.c.canonical_product_id,
+            observation_rankings.c.price.label("initial_price"),
+        )
+        .where(observation_rankings.c.first_rank == 1)
+        .subquery()
+    )
+    last_prices = (
+        select(
+            observation_rankings.c.canonical_product_id,
+            observation_rankings.c.price.label("latest_price"),
+        )
+        .where(observation_rankings.c.last_rank == 1)
+        .subquery()
+    )
+
+    trend_rows = db.execute(
+        select(
+            CanonicalProduct.id,
+            first_prices.c.initial_price,
+            last_prices.c.latest_price,
+            (first_prices.c.initial_price - last_prices.c.latest_price).label("price_drop_amount"),
+            (
+                ((first_prices.c.initial_price - last_prices.c.latest_price) * 100.0)
+                / first_prices.c.initial_price
+            ).label("price_drop_percentage"),
+        )
+        .join(first_prices, first_prices.c.canonical_product_id == CanonicalProduct.id)
+        .join(last_prices, last_prices.c.canonical_product_id == CanonicalProduct.id)
+        .where(
+            CanonicalProduct.is_active.is_(True),
+            first_prices.c.initial_price > last_prices.c.latest_price,
+        )
+        .order_by(
+            (((first_prices.c.initial_price - last_prices.c.latest_price) * 100.0) / first_prices.c.initial_price).desc(),
+            CanonicalProduct.canonical_name.asc(),
+        )
+        .limit(limit)
+    ).all()
+
+    products = _load_canonical_products_by_ids(db, [row.id for row in trend_rows])
+    products_by_id = {product.id: product for product in products}
     trends = []
-
-    for product in _load_canonical_products(db):
-        observations = []
-        for offer in product.offers:
-            observations.extend(
-                [
-                    observation
-                    for observation in offer.price_observations
-                    if observation.observed_at >= since
-                ]
-            )
-
-        observations.sort(key=lambda item: item.observed_at)
-        if len(observations) < 2:
+    for row in trend_rows:
+        product = products_by_id.get(row.id)
+        if product is None:
             continue
-
-        initial_price = observations[0].price
-        latest_price = observations[-1].price
-        if initial_price <= latest_price:
-            continue
-
-        drop_amount = initial_price - latest_price
-        drop_percentage = (drop_amount / initial_price) * 100
         trends.append(
             {
                 "product": V2ProductSummarySchema(**{key: value for key, value in _serialize_product(product).items() if key != "listings"}),
-                "initial_price": initial_price,
-                "latest_price": latest_price,
-                "price_drop_amount": drop_amount,
-                "price_drop_percentage": drop_percentage,
+                "initial_price": row.initial_price,
+                "latest_price": row.latest_price,
+                "price_drop_amount": row.price_drop_amount,
+                "price_drop_percentage": row.price_drop_percentage,
             }
         )
-
-    trends.sort(key=lambda item: item["price_drop_percentage"], reverse=True)
-    return trends[:limit]
+    return trends
 
 
 @router.get("/scrape-runs", response_model=List[V2ScrapeRunSchema])
@@ -593,6 +752,7 @@ def patch_match_decision(
     decision_id: int,
     payload: V2MatchDecisionResolutionRequest,
     db: Session = Depends(get_db),
+    _: str = Depends(require_review_api_key),
 ):
     if payload.decision not in (MatchDecisionType.MANUAL_MATCHED, MatchDecisionType.MANUAL_REJECTED):
         raise HTTPException(

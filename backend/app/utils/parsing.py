@@ -272,14 +272,32 @@ def _parse_psu(name: str) -> dict:
         attributes["wattage"] = int(wattage_match.group(1))
 
     # 80+ Rating
-    # FIX: More robust check that doesn't rely on the "80+" prefix.
-    if "titanium" in name_lower: attributes["rating"] = "80+ Titanium"
-    elif "platinum" in name_lower: attributes["rating"] = "80+ Platinum"
-    elif "gold" in name_lower: attributes["rating"] = "80+ Gold"
-    elif "silver" in name_lower: attributes["rating"] = "80+ Silver"
-    elif "bronze" in name_lower: attributes["rating"] = "80+ Bronze"
-    elif "80 plus" in name_lower or "80+" in name_lower:
-        attributes["rating"] = "80+ White"
+    normalized_name = re.sub(r"[-_/]+", " ", name_lower)
+    tier_match = re.search(
+        r"\b(?:80\s*(?:\+|plus)|80plus)\s*(?:certified\s*)?"
+        r"(titanium|platinum|gold|silver|bronze|white|standard)\b",
+        normalized_name,
+        re.IGNORECASE,
+    )
+    if tier_match:
+        tier = tier_match.group(1).lower()
+    else:
+        fallback_match = re.search(r"\b(titanium|platinum|gold|silver|bronze)\b", normalized_name, re.IGNORECASE)
+        tier = fallback_match.group(1).lower() if fallback_match else None
+        if tier is None and re.search(r"\b(?:80\s*(?:\+|plus)|80plus)\b", normalized_name, re.IGNORECASE):
+            tier = "white"
+
+    if tier:
+        tier_label = {
+            "standard": "White",
+            "white": "White",
+            "bronze": "Bronze",
+            "silver": "Silver",
+            "gold": "Gold",
+            "platinum": "Platinum",
+            "titanium": "Titanium",
+        }[tier]
+        attributes["rating"] = f"80+ {tier_label}"
 
     # Modularity
     if "fully modular" in name_lower: attributes["modularity"] = "Fully Modular"
@@ -317,18 +335,18 @@ def parse_product_attributes(name: str, category_name: str) -> dict:
     """
     Top-level parser that routes to a category-specific parser.
     """
-    category_name = category_name.lower()
+    normalized_category = re.sub(r"[^a-z0-9]+", " ", category_name.lower()).strip()
     
-    if "cpu" in category_name and "cooler" not in category_name: return _parse_cpu(name)
-    if "graphics" in category_name: return _parse_gpu(name)
-    if "monitor" in category_name: return _parse_monitor(name)
-    if "motherboard" in category_name: return _parse_motherboard(name)
-    if "memory" in category_name or "ram" in category_name: return _parse_ram(name)
-    if "storage" in category_name or "ssd" in category_name or "hdd" in category_name: return _parse_storage(name)
-    # FIX: More flexible check for "power supply" or "power supplies"
-    if "power suppl" in category_name or "psu" in category_name: return _parse_psu(name)
-    if "case" in category_name: return _parse_case(name)
-    if "cooling" in category_name: return _parse_cooler(name)
+    if "cpu" in normalized_category and "cooler" not in normalized_category: return _parse_cpu(name)
+    if "graphics" in normalized_category: return _parse_gpu(name)
+    if "monitor" in normalized_category: return _parse_monitor(name)
+    if "motherboard" in normalized_category: return _parse_motherboard(name)
+    if "memory" in normalized_category or "ram" in normalized_category: return _parse_ram(name)
+    if "storage" in normalized_category or "ssd" in normalized_category or "hdd" in normalized_category: return _parse_storage(name)
+    if re.search(r"\bpower\s+suppl(?:y|ies)\b", normalized_category) or re.search(r"\bpsu\b", normalized_category):
+        return _parse_psu(name)
+    if "case" in normalized_category: return _parse_case(name)
+    if "cooling" in normalized_category: return _parse_cooler(name)
         
     return {}
 
