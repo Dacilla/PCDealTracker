@@ -1,146 +1,90 @@
-# scripts/run_scraper.py
+import argparse
 import os
 import sys
-import time
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# Add the project root to the Python path
+# Add the project root to the Python path.
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend.app.config import settings
-from scripts.init_database import setup_database
-from backend.app.dependencies import SessionLocal
-from backend.app.database import ScrapeLog
-# Import the new merging and clearing functions
-from scripts.merge_products import clear_existing_merged_products, merge_products_with_fuzzy_logic
-from backend.app.services.v2_catalog import NATIVE_V2_RETAILER_NAMES, rebuild_v2_catalog_from_legacy
-# Import the cache clearing utility
 from backend.app.redis_client import clear_all_cache
-
-# Import the individual scraper runner functions
-from backend.app.scrapers.pccg_scraper import run_pccg_scraper
-from backend.app.scrapers.scorptec_scraper import run_scorptec_scraper
-from backend.app.scrapers.scorptec_v2_scraper import run_scorptec_v2_scraper
-from backend.app.scrapers.centrecom_scraper import run_centrecom_scraper
 from backend.app.scrapers.centrecom_v2_scraper import run_centrecom_v2_scraper
-from backend.app.scrapers.msy_scraper import run_msy_scraper
-from backend.app.scrapers.umart_scraper import run_umart_scraper
-from backend.app.scrapers.computeralliance_scraper import run_computeralliance_scraper
 from backend.app.scrapers.computeralliance_v2_scraper import run_computeralliance_v2_scraper
-from backend.app.scrapers.jw_scraper import run_jw_scraper
 from backend.app.scrapers.jw_v2_scraper import run_jw_v2_scraper
-from backend.app.scrapers.shoppingexpress_scraper import run_shoppingexpress_scraper
+from backend.app.scrapers.msy_v2_scraper import run_msy_v2_scraper
+from backend.app.scrapers.pccg_v2_scraper import run_pccg_v2_scraper
+from backend.app.scrapers.scorptec_v2_scraper import run_scorptec_v2_scraper
 from backend.app.scrapers.shoppingexpress_v2_scraper import run_shoppingexpress_v2_scraper
-# from backend.app.scrapers.austin_scraper import run_austin_scraper # Temporarily disabled
+from backend.app.scrapers.umart_v2_scraper import run_umart_v2_scraper
+from scripts.init_database import setup_database
 
-# A list of all scraper functions to be executed
-ALL_SCRAPERS = [
-    run_pccg_scraper,
-    run_scorptec_scraper,
-    run_centrecom_scraper,
-    run_msy_scraper,
-    run_umart_scraper,
-    run_computeralliance_scraper,
-    run_jw_scraper,
-    run_shoppingexpress_scraper,
-    # run_austin_scraper,
+
+NATIVE_V2_SCRAPERS = [
+    run_computeralliance_v2_scraper,
+    run_shoppingexpress_v2_scraper,
+    run_scorptec_v2_scraper,
+    run_jw_v2_scraper,
+    run_centrecom_v2_scraper,
+    run_umart_v2_scraper,
+    run_msy_v2_scraper,
+    run_pccg_v2_scraper,
 ]
 
-def main():
-    """
-    Initializes the database, runs all scrapers, performs a full rebuild of
-    merged products, and finally clears the cache.
-    """
-    db_session = SessionLocal()
-    
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    return argparse.ArgumentParser(description="Run the native v2 PCDealTracker scrapers.")
+
+
+def run_scraper_batch(shutdown_event: threading.Event, scraper_funcs, *, batch_label: str) -> None:
+    if not scraper_funcs:
+        print(f"\n--- No scrapers configured for batch: {batch_label} ---")
+        return
+
+    max_workers = settings.max_concurrent_scrapers
+    print(f"\n--- Starting {batch_label} Concurrently ---")
+    print(f"Max concurrent scrapers set to: {max_workers}")
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_scraper = {}
+        for scraper_func in scraper_funcs:
+            scraper_name = scraper_func.__name__
+            future = executor.submit(scraper_func, shutdown_event)
+            future_to_scraper[future] = scraper_name
+            print(f"-> Submitted {scraper_name} to the queue.")
+            time.sleep(2)
+
+        print(f"\n--- All {batch_label} submitted. Waiting for completion... ---")
+
+        for future in as_completed(future_to_scraper):
+            scraper_name = future_to_scraper[future]
+            try:
+                future.result()
+                print(f"\n--- {scraper_name} Finished Successfully ---")
+            except Exception as exc:
+                print(f"\n--- {scraper_name} Generated an Exception: {exc} ---")
+
+
+def main(argv=None):
+    parser = build_arg_parser()
+    parser.parse_args(argv)
+
+    shutdown_event = threading.Event()
+
     try:
-        # --- Step 1: Initialize the database ---
         print("--- Initializing Database ---")
         setup_database()
         print("--- Database Initialization Complete ---")
-
-        print("\n--- Starting All Scrapers Concurrently ---")
-
-        max_workers = settings.max_concurrent_scrapers
-        shutdown_event = threading.Event()
-        print(f"Max concurrent scrapers set to: {max_workers}")
-
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_scraper = {}
-            for scraper_func in ALL_SCRAPERS:
-                scraper_name = scraper_func.__name__
-                start_log = ScrapeLog(status="STARTED", details=f"Starting scraper: {scraper_name}")
-                db_session.add(start_log)
-                db_session.commit()
-
-                future = executor.submit(scraper_func, shutdown_event)
-                future_to_scraper[future] = scraper_name
-                print(f"-> Submitted {scraper_name} to the queue.")
-                time.sleep(5)
-
-            print("\n--- All scrapers submitted. Waiting for completion... ---")
-
-            for future in as_completed(future_to_scraper):
-                scraper_name = future_to_scraper[future]
-                status = "SUCCESS"
-                details = f"{scraper_name} completed successfully."
-                try:
-                    future.result()
-                    print(f"\n--- {scraper_name} Finished Successfully ---")
-                except Exception as exc:
-                    status = "FAILURE"
-                    details = f"{scraper_name} failed with exception: {exc}"
-                    print(f"\n--- {scraper_name} Generated an Exception: {exc} ---")
-
-                end_log = ScrapeLog(status=status, details=details)
-                db_session.add(end_log)
-                db_session.commit()
-
+        run_scraper_batch(shutdown_event, NATIVE_V2_SCRAPERS, batch_label="Native V2 Scrapers")
     except KeyboardInterrupt:
         print("\n\nKeyboard interrupt received. Signaling scrapers to shut down...")
         shutdown_event.set()
-        shutdown_log = ScrapeLog(status="SHUTDOWN", details="Scraping process terminated by user.")
-        db_session.add(shutdown_log)
-        db_session.commit()
-
     finally:
-        print("\n--- All Scrapers Have Completed Their Execution ---")
-    
+        print("\n--- Scrape Pipeline Execution Complete ---")
+
     if not shutdown_event.is_set():
-        # --- Step 2: Perform a full rebuild of merged products ---
-        print("\n--- Performing Full Merged Product Rebuild ---")
-        clear_existing_merged_products(db_session)
-        merge_products_with_fuzzy_logic()
-
-        # --- Step 3: Rebuild the persisted v2 catalog from the refreshed legacy data ---
-        print("\n--- Rebuilding Persisted V2 Catalog ---")
-        rebuild_v2_catalog_from_legacy(
-            db_session,
-            clear_existing=True,
-            exclude_retailer_names=NATIVE_V2_RETAILER_NAMES,
-        )
-
-        # --- Step 4: Refresh one retailer through the native v2 ingestion path ---
-        print("\n--- Refreshing Computer Alliance Through Native V2 Ingestion ---")
-        run_computeralliance_v2_scraper(shutdown_event)
-
-        print("\n--- Refreshing Shopping Express Through Native V2 Ingestion ---")
-        run_shoppingexpress_v2_scraper(shutdown_event)
-
-        print("\n--- Refreshing Scorptec Through Native V2 Ingestion ---")
-        run_scorptec_v2_scraper(shutdown_event)
-
-        print("\n--- Refreshing JW Computers Through Native V2 Ingestion ---")
-        run_jw_v2_scraper(shutdown_event)
-
-        print("\n--- Refreshing Centre Com Through Native V2 Ingestion ---")
-        run_centrecom_v2_scraper(shutdown_event)
-        
-        # --- Step 5: Clear the cache to reflect the new data ---
         clear_all_cache()
-        
-    db_session.close()
 
 
 if __name__ == "__main__":

@@ -6,29 +6,22 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 from bs4 import BeautifulSoup
 from sqlalchemy.orm import Session
-from sqlalchemy import select, func, and_, update
 import time
 import datetime
 import threading
-
-from ..database import Product, PriceHistory, ProductStatus, Category
-# Import the new normalization utilities
-from ..utils.parsing import parse_product_name, normalize_model_strict, normalize_model_loose
 
 # A lock to prevent race conditions during driver initialization
 _driver_lock = threading.Lock()
 
 class BaseScraper:
     """
-    A base class for web scrapers using undetected-chromedriver with a flexible,
-    explicit waiting strategy and enhanced, non-destructive debugging.
-    Includes centralized logic for updating products, detecting deals, and handling delisted items.
+    A base class for Selenium-driven scrapers with explicit waiting and light
+    debugging support for failed page loads.
     """
     def __init__(self, db_session: Session, shutdown_event: threading.Event):
         self.db_session = db_session
         self.driver = None
         self.shutdown_event = shutdown_event
-        self.scraped_product_urls = set() # To track all URLs found during the scrape
         
         try:
             # Use a lock to ensure only one thread initializes a driver at a time
@@ -94,149 +87,16 @@ class BaseScraper:
                 print(f"Could not save debug files: {se}")
             return None
 
-    def _update_product_and_detect_deal(self, product_data: dict, category: Category):
-        """
-        Handles the core logic of adding or updating a product in the database,
-        including data enrichment, normalization, price history tracking, and deal detection.
-        """
-        product_url = product_data.get("url")
-        if not product_url:
-            return
-
-        self.scraped_product_urls.add(product_url)
-        session = self.db_session
-        
-        product_name = product_data.get("name", "")
-        enriched_data = parse_product_name(product_name)
-        model_str = enriched_data.get("model", "")
-        # Generate both normalized model strings
-        strict_normalized_model = normalize_model_strict(model_str)
-        loose_normalized_model = normalize_model_loose(model_str)
-        
-        existing_product = session.execute(
-            select(Product).where(Product.url == product_url)
-        ).scalar_one_or_none()
-
-        if existing_product:
-            product = existing_product
-            price_changed = product.current_price != product_data.get("price")
-            
-            product.name = product_name
-            product.brand = enriched_data.get("brand")
-            product.model = model_str
-            product.normalized_model = strict_normalized_model
-            product.loose_normalized_model = loose_normalized_model
-            product.previous_price = product.current_price
-            product.current_price = product_data.get("price")
-            product.image_url = product_data.get("image_url")
-            product.status = product_data.get("status")
-
-            if price_changed and product.current_price is not None:
-                print(f"  Price changed for {product.name}. New price: ${product.current_price}")
-                session.add(PriceHistory(product_id=product.id, price=product.current_price))
-                
-                is_deal = False
-                deal_reasons = []
-
-                lowest_price = session.execute(select(func.min(PriceHistory.price)).where(PriceHistory.product_id == product.id)).scalar_one_or_none()
-                if lowest_price is not None and product.current_price <= lowest_price:
-                    is_deal = True
-                    deal_reasons.append("all-time low price")
-
-                if product.previous_price and product.current_price < (product.previous_price * 0.90):
-                    is_deal = True
-                    deal_reasons.append("significant price drop")
-                
-                thirty_days_ago = datetime.datetime.utcnow() - datetime.timedelta(days=30)
-                avg_price_query = select(func.avg(PriceHistory.price)).where(
-                    and_(PriceHistory.product_id == product.id, PriceHistory.date >= thirty_days_ago)
-                )
-                avg_price = session.execute(avg_price_query).scalar_one_or_none()
-                
-                if avg_price and product.current_price < avg_price:
-                    is_deal = True
-                    deal_reasons.append("below 30-day average")
-
-                if is_deal:
-                    if not product.on_sale:
-                        print(f"  *** New Deal Found! Reasons: {', '.join(deal_reasons)} for {product.name} ***")
-                    product.on_sale = True
-                else:
-                    product.on_sale = False
-            
-        else:
-            print(f"  Adding new product: {product_name}")
-            new_product = Product(
-                name=product_name,
-                brand=enriched_data.get("brand"),
-                model=model_str,
-                normalized_model=strict_normalized_model,
-                loose_normalized_model=loose_normalized_model,
-                url=product_data.get("url"),
-                current_price=product_data.get("price"),
-                previous_price=product_data.get("price"),
-                image_url=product_data.get("image_url"),
-                retailer_id=self.retailer.id,
-                category_id=category.id,
-                status=product_data.get("status"),
-                on_sale=True
-            )
-            session.add(new_product)
-            session.flush()
-            
-            if new_product.current_price is not None:
-                session.add(PriceHistory(product_id=new_product.id, price=new_product.current_price))
-
-    def mark_delisted_products(self):
-        """
-        Compares scraped URLs against the database and marks missing products as UNAVAILABLE.
-        """
-        print("\n--- Checking for Delisted Products ---")
-        
-        db_product_urls_query = select(Product.url).where(
-            Product.retailer_id == self.retailer.id,
-            Product.status == ProductStatus.AVAILABLE
-        )
-        db_product_urls_result = self.db_session.execute(db_product_urls_query).scalars().all()
-        db_product_urls = set(db_product_urls_result)
-
-        delisted_urls = db_product_urls - self.scraped_product_urls
-
-        if not delisted_urls:
-            print("No delisted products found for this retailer.")
-            return
-
-        print(f"Found {len(delisted_urls)} delisted products. Updating their status...")
-
-        update_query = (
-            update(Product)
-            .where(Product.url.in_(delisted_urls))
-            .values(status=ProductStatus.UNAVAILABLE, on_sale=False)
-        )
-        
-        try:
-            result = self.db_session.execute(update_query)
-            self.db_session.commit()
-            print(f"Successfully marked {result.rowcount} products as unavailable.")
-        except Exception as e:
-            print(f"Error updating delisted products: {e}")
-            self.db_session.rollback()
-
     def run(self):
         raise NotImplementedError("Each scraper must implement the 'run' method.")
 
     def close(self):
         """
-        Gracefully closes the scraper, ensuring delisted products are marked
-        and the webdriver is quit. This now handles potential OSErrors on shutdown.
+        Gracefully closes the webdriver. This handles potential OSErrors on shutdown.
         """
-        self.mark_delisted_products()
-        
         if self.driver:
             try:
                 self.driver.quit()
             except OSError as e:
-                # This can happen on Windows if the handle is already invalid during shutdown.
-                # It's safe to ignore as the process is ending anyway.
                 print(f"Ignoring non-critical error during driver shutdown: {e}")
 

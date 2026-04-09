@@ -4,18 +4,16 @@ from dataclasses import dataclass
 from typing import Optional
 
 from sqlalchemy import delete, select
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
+from thefuzz import fuzz
 
 from ..database import (
     CanonicalProduct,
     MatchDecision,
     MatchDecisionType,
     Offer,
-    PriceHistory,
     PriceObservation,
-    Product,
     ProductStatus,
-    Retailer,
     RetailerListing,
     ScrapeRun,
     ScrapeRunStatus,
@@ -36,15 +34,6 @@ CATEGORY_FINGERPRINT_ATTRS = {
     "cooling": ("type",),
 }
 
-NATIVE_V2_RETAILER_NAMES = (
-    "Centre Com",
-    "Computer Alliance",
-    "Shopping Express",
-    "Scorptec",
-    "JW Computers",
-)
-
-
 @dataclass
 class V2ListingSnapshot:
     name: str
@@ -63,6 +52,13 @@ class UpsertResult:
     offer_created: bool
     observation_created: bool
     canonical_created: bool
+
+
+@dataclass
+class CandidateRankResult:
+    canonical_product: CanonicalProduct
+    score: float
+    reasons: list[str]
 
 
 def normalize_brand(name: str, brand: Optional[str]) -> Optional[str]:
@@ -380,164 +376,151 @@ def mark_missing_retailer_urls_unavailable(
     return updated
 
 
-def rebuild_v2_catalog_from_legacy(
+def resolve_match_decision(
     db: Session,
     *,
-    retailer_name: Optional[str] = None,
-    exclude_retailer_names: Optional[tuple[str, ...] | list[str] | set[str]] = None,
-    clear_existing: bool = True,
-) -> ScrapeRun:
-    if clear_existing:
-        clear_v2_catalog(db)
+    match_decision: MatchDecision,
+    decision: MatchDecisionType,
+    canonical_product: Optional[CanonicalProduct] = None,
+    rationale: Optional[str] = None,
+) -> MatchDecision:
+    if decision not in (MatchDecisionType.MANUAL_MATCHED, MatchDecisionType.MANUAL_REJECTED):
+        raise ValueError("Only manual match decisions can be resolved through this workflow")
+    if decision == MatchDecisionType.MANUAL_MATCHED and canonical_product is None:
+        raise ValueError("Manual matches require a target canonical product")
 
-    excluded_names = tuple(sorted(set(exclude_retailer_names or ())))
+    offers = db.execute(
+        select(Offer).where(Offer.retailer_listing_id == match_decision.retailer_listing_id)
+    ).scalars().all()
 
-    product_query = (
-        select(Product)
-        .options(joinedload(Product.retailer), joinedload(Product.category), joinedload(Product.price_history))
-        .where(Product.category_id.isnot(None))
-        .order_by(Product.id.asc())
-    )
-    if retailer_name:
-        product_query = product_query.join(Product.retailer).where(Product.retailer.has(name=retailer_name))
-    if excluded_names:
-        product_query = product_query.join(Product.retailer).where(Retailer.name.not_in(excluded_names))
+    if decision == MatchDecisionType.MANUAL_MATCHED:
+        assert canonical_product is not None
+        canonical_product.is_active = True
+        for offer in offers:
+            offer.canonical_product_id = canonical_product.id
+            offer.category_id = canonical_product.category_id
+            offer.is_active = offer.status == ProductStatus.AVAILABLE
+        match_decision.canonical_product_id = canonical_product.id
+    else:
+        for offer in offers:
+            offer.is_active = False
+        match_decision.canonical_product_id = None
 
-    products = db.execute(product_query).scalars().unique().all()
+    match_decision.decision = decision
+    match_decision.matcher = "manual_review"
+    match_decision.confidence = 1.0
+    if rationale is not None:
+        match_decision.rationale = rationale
 
-    scrape_run = ScrapeRun(
-        retailer_id=None,
-        status=ScrapeRunStatus.SUCCEEDED,
-        scraper_name="legacy_backfill",
-        trigger_source="script",
-        listings_seen=len(products),
-        listings_created=len(products),
-        finished_at=utcnow_naive(),
-        meta={
-            "retailer_name": retailer_name,
-            "exclude_retailer_names": list(excluded_names),
-            "clear_existing": clear_existing,
-        },
-    )
-    db.add(scrape_run)
     db.flush()
+    return match_decision
 
-    canonical_cache = {}
-    listing_count = 0
 
-    for product in products:
-        if not product.category or not product.retailer:
-            continue
+def _score_canonical_candidate(
+    *,
+    listing: RetailerListing,
+    category_name: str,
+    canonical_product: CanonicalProduct,
+) -> CandidateRankResult:
+    listing_name = listing.title or ""
+    listing_brand = (listing.brand or normalize_brand(listing_name, None) or "").lower()
+    listing_model = listing.loose_normalized_model or listing.normalized_model or listing.model or listing_name
+    listing_attributes = extract_attributes(listing_name, category_name) if category_name else {}
 
-        identity, attrs, normalized_brand = build_catalog_identity(
-            category_id=product.category_id,
-            category_name=product.category.name,
-            name=product.name,
-            brand=product.brand,
-            model=product.model,
-            normalized_model=product.normalized_model,
-            loose_normalized_model=product.loose_normalized_model,
+    candidate_name = canonical_product.canonical_name or ""
+    candidate_brand = (canonical_product.brand or "").lower()
+    candidate_model = canonical_product.model_key or candidate_name
+    candidate_attributes = canonical_product.attributes or {}
+
+    name_score = fuzz.token_set_ratio(listing_name, candidate_name)
+    model_score = fuzz.token_set_ratio(listing_model, candidate_model)
+
+    if listing_brand and candidate_brand:
+        brand_score = 100.0 if listing_brand == candidate_brand else 15.0
+    else:
+        brand_score = 55.0
+
+    shared_attribute_keys = sorted(set(listing_attributes) & set(candidate_attributes))
+    matched_attribute_keys = [
+        key for key in shared_attribute_keys if listing_attributes.get(key) == candidate_attributes.get(key)
+    ]
+    attribute_score = (
+        (len(matched_attribute_keys) / len(shared_attribute_keys)) * 100.0 if shared_attribute_keys else 50.0
+    )
+
+    review_fingerprint = ""
+    if listing.category_id is not None and category_name:
+        identity, _, _ = build_catalog_identity(
+            category_id=listing.category_id,
+            category_name=category_name,
+            name=listing_name,
+            brand=listing.brand,
+            model=listing.model,
+            normalized_model=listing.normalized_model,
+            loose_normalized_model=listing.loose_normalized_model,
         )
-        fingerprint = identity_to_fingerprint(identity)
-        cache_key = (product.category_id, normalized_brand, fingerprint)
+        review_fingerprint = identity_to_fingerprint(identity)
 
-        canonical_product = canonical_cache.get(cache_key)
-        if canonical_product is None:
-            canonical_product = CanonicalProduct(
-                canonical_name=product.name,
-                category_id=product.category_id,
-                brand=product.brand or normalized_brand or None,
-                model_key=product.loose_normalized_model or product.normalized_model or product.model,
-                fingerprint=fingerprint,
-                attributes=attrs,
-                match_bucket=product.category.name.lower().replace(" ", "_"),
-            )
-            db.add(canonical_product)
-            db.flush()
-            canonical_cache[cache_key] = canonical_product
-        elif len(product.name) > len(canonical_product.canonical_name):
-            canonical_product.canonical_name = product.name
+    fingerprint_bonus = 18.0 if review_fingerprint and review_fingerprint == canonical_product.fingerprint else 0.0
+    final_score = min(
+        100.0,
+        (model_score * 0.45) + (name_score * 0.3) + (brand_score * 0.15) + (attribute_score * 0.1) + fingerprint_bonus,
+    )
 
-        listing = RetailerListing(
-            retailer_id=product.retailer_id,
-            category_id=product.category_id,
-            retailer_sku=product.sku,
-            source_url=product.url,
-            source_hash=hashlib.sha1(product.url.encode("utf-8")).hexdigest()[:24],
-            title=product.name,
-            brand=product.brand,
-            model=product.model,
-            normalized_model=product.normalized_model,
-            loose_normalized_model=product.loose_normalized_model,
-            image_url=product.image_url,
-            raw_payload={"legacy_product_id": product.id, "on_sale": product.on_sale},
-            status=product.status,
+    reasons: list[str] = []
+    if fingerprint_bonus:
+        reasons.append("Exact deterministic fingerprint match")
+    if listing_brand and candidate_brand and listing_brand == candidate_brand:
+        reasons.append(f"Brand match: {canonical_product.brand}")
+    if matched_attribute_keys:
+        reasons.append(f"Matched attributes: {', '.join(key.replace('_', ' ') for key in matched_attribute_keys[:3])}")
+    if model_score >= 70:
+        reasons.append(f"Model similarity {model_score}")
+    if name_score >= 70:
+        reasons.append(f"Name similarity {name_score}")
+    if not reasons:
+        reasons.append("Weak fallback candidate based on title similarity")
+
+    return CandidateRankResult(
+        canonical_product=canonical_product,
+        score=round(final_score, 1),
+        reasons=reasons,
+    )
+
+
+def rank_match_candidates(
+    db: Session,
+    *,
+    listing: RetailerListing,
+    limit: int = 8,
+    search: Optional[str] = None,
+) -> list[CandidateRankResult]:
+    query = (
+        select(CanonicalProduct)
+        .options(
+            joinedload(CanonicalProduct.category),
+            selectinload(CanonicalProduct.offers),
         )
-        db.add(listing)
-        db.flush()
+        .where(CanonicalProduct.is_active.is_(True))
+    )
 
-        offer = Offer(
-            canonical_product_id=canonical_product.id,
-            retailer_listing_id=listing.id,
-            retailer_id=product.retailer_id,
-            category_id=product.category_id,
-            listing_name=product.name,
-            listing_url=product.url,
-            image_url=product.image_url,
-            current_price=product.current_price,
-            previous_price=product.previous_price,
-            status=product.status,
-            is_active=product.status == ProductStatus.AVAILABLE,
-        )
-        db.add(offer)
-        db.flush()
+    if listing.category_id is not None:
+        query = query.where(CanonicalProduct.category_id == listing.category_id)
+    if search:
+        query = query.where(CanonicalProduct.canonical_name.ilike(f"%{search}%"))
 
-        db.add(
-            MatchDecision(
-                retailer_listing_id=listing.id,
-                canonical_product_id=canonical_product.id,
-                scrape_run_id=scrape_run.id,
-                decision=MatchDecisionType.AUTO_MATCHED,
-                confidence=1.0,
-                matcher="legacy_backfill",
-                rationale="Migrated from legacy Product row using deterministic fingerprint grouping",
-                fingerprint=fingerprint,
-            )
-        )
-
-        history_entries = sorted(product.price_history, key=lambda item: item.date)
-        if history_entries:
-            for entry in history_entries:
-                db.add(
-                    PriceObservation(
-                        offer_id=offer.id,
-                        observed_at=entry.date,
-                        price=entry.price,
-                        previous_price=None,
-                        in_stock=product.status == ProductStatus.AVAILABLE,
-                        scrape_run_id=scrape_run.id,
-                        raw_payload={"legacy_price_history_id": entry.id},
-                    )
-                )
-        elif product.current_price is not None:
-            db.add(
-                PriceObservation(
-                    offer_id=offer.id,
-                    observed_at=utcnow_naive(),
-                    price=product.current_price,
-                    previous_price=product.previous_price,
-                    in_stock=product.status == ProductStatus.AVAILABLE,
-                    scrape_run_id=scrape_run.id,
-                    raw_payload={"legacy_product_id": product.id, "synthetic_observation": True},
-                )
-            )
-
-        listing_count += 1
-
-    scrape_run.listings_seen = len(products)
-    scrape_run.listings_created = listing_count
-    scrape_run.listings_updated = 0
-    scrape_run.finished_at = utcnow_naive()
-
-    db.commit()
-    return scrape_run
+    candidates = db.execute(query).scalars().unique().all()
+    category_name = listing.category.name if listing.category is not None else ""
+    ranked = [
+        _score_canonical_candidate(listing=listing, category_name=category_name, canonical_product=candidate)
+        for candidate in candidates
+    ]
+    ranked.sort(
+        key=lambda item: (
+            item.score,
+            len(item.canonical_product.offers),
+            item.canonical_product.canonical_name.lower(),
+        ),
+        reverse=True,
+    )
+    return ranked[:limit]

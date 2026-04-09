@@ -6,14 +6,12 @@ from typing import List, Optional
 from sqlalchemy import (
     JSON,
     Boolean,
-    Column,
     DateTime,
     Enum as SQLAlchemyEnum,
     Float,
     ForeignKey,
     Integer,
     String,
-    Table,
     Text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -48,14 +46,6 @@ class Base(DeclarativeBase):
     pass
 
 
-merged_product_association = Table(
-    "merged_product_association",
-    Base.metadata,
-    Column("merged_product_id", Integer, ForeignKey("merged_products.id"), primary_key=True),
-    Column("product_id", Integer, ForeignKey("products.id"), primary_key=True),
-)
-
-
 class Retailer(Base):
     __tablename__ = "retailers"
 
@@ -64,7 +54,6 @@ class Retailer(Base):
     url: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     logo_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
-    products: Mapped[List["Product"]] = relationship(back_populates="retailer")
     v2_listings: Mapped[List["RetailerListing"]] = relationship(back_populates="retailer")
     v2_offers: Mapped[List["Offer"]] = relationship(back_populates="retailer")
     scrape_runs: Mapped[List["ScrapeRun"]] = relationship(back_populates="retailer")
@@ -79,97 +68,12 @@ class Category(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
 
-    products: Mapped[List["Product"]] = relationship(back_populates="category")
-    merged_products: Mapped[List["MergedProduct"]] = relationship(back_populates="category")
     canonical_products: Mapped[List["CanonicalProduct"]] = relationship(back_populates="category")
     retailer_listings: Mapped[List["RetailerListing"]] = relationship(back_populates="category")
     offers: Mapped[List["Offer"]] = relationship(back_populates="category")
 
     def __repr__(self) -> str:
         return f"Category(id={self.id!r}, name={self.name!r})"
-
-
-class Product(Base):
-    __tablename__ = "products"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String, nullable=False, index=True)
-    brand: Mapped[Optional[str]] = mapped_column(String, index=True, nullable=True)
-    model: Mapped[Optional[str]] = mapped_column(String, index=True, nullable=True)
-    normalized_model: Mapped[Optional[str]] = mapped_column(String, index=True, nullable=True)
-    loose_normalized_model: Mapped[Optional[str]] = mapped_column(String, index=True, nullable=True)
-    sku: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    url: Mapped[str] = mapped_column(String, nullable=False, unique=True)
-    image_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    current_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    previous_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    on_sale: Mapped[bool] = mapped_column(Boolean, default=False)
-    status: Mapped[ProductStatus] = mapped_column(
-        SQLAlchemyEnum(ProductStatus, native_enum=False),
-        default=ProductStatus.AVAILABLE,
-    )
-    retailer_id: Mapped[int] = mapped_column(ForeignKey("retailers.id"))
-    category_id: Mapped[int] = mapped_column(ForeignKey("categories.id"))
-
-    retailer: Mapped["Retailer"] = relationship(back_populates="products")
-    category: Mapped["Category"] = relationship(back_populates="products")
-    price_history: Mapped[List["PriceHistory"]] = relationship(
-        back_populates="product",
-        cascade="all, delete-orphan",
-    )
-    merged_products: Mapped[List["MergedProduct"]] = relationship(
-        secondary=merged_product_association,
-        back_populates="products",
-    )
-
-    def __repr__(self) -> str:
-        return f"Product(id={self.id!r}, name={self.name!r}, price={self.current_price!r})"
-
-
-class MergedProduct(Base):
-    __tablename__ = "merged_products"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    canonical_name: Mapped[str] = mapped_column(String, unique=True, nullable=False)
-    brand: Mapped[Optional[str]] = mapped_column(String, index=True, nullable=True)
-    model: Mapped[Optional[str]] = mapped_column(String, index=True, nullable=True)
-    category_id: Mapped[int] = mapped_column(ForeignKey("categories.id"))
-    attributes: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-
-    category: Mapped["Category"] = relationship(back_populates="merged_products")
-    products: Mapped[List["Product"]] = relationship(
-        secondary=merged_product_association,
-        back_populates="merged_products",
-    )
-
-    def __repr__(self) -> str:
-        return f"MergedProduct(id={self.id!r}, name={self.canonical_name!r})"
-
-
-class PriceHistory(Base):
-    __tablename__ = "price_history"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), nullable=False)
-    price: Mapped[float] = mapped_column(Float, nullable=False)
-    date: Mapped[datetime.datetime] = mapped_column(DateTime, default=utcnow_naive)
-
-    product: Mapped["Product"] = relationship(back_populates="price_history")
-
-    def __repr__(self) -> str:
-        return f"PriceHistory(id={self.id!r}, product_id={self.product_id!r}, price={self.price!r})"
-
-
-class ScrapeLog(Base):
-    __tablename__ = "scrape_logs"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    timestamp: Mapped[datetime.datetime] = mapped_column(DateTime, default=utcnow_naive)
-    status: Mapped[str] = mapped_column(String, nullable=False)
-    details: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-
-    def __repr__(self) -> str:
-        return f"ScrapeLog(id={self.id!r}, status={self.status!r}, timestamp={self.timestamp!r})"
 
 
 class CanonicalProduct(Base):

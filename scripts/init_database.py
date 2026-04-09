@@ -31,7 +31,6 @@ def setup_database():
             {"name": "Computer Alliance", "url": "https://www.computeralliance.com.au", "logo_url": "assets/logos/computeralliance.png"},
             {"name": "JW Computers", "url": "https://www.jw.com.au", "logo_url": "assets/logos/jw.png"},
             {"name": "Shopping Express", "url": "https://www.shoppingexpress.com.au", "logo_url": "assets/logos/shoppingexpress.png"},
-            {"name": "Austin Computers", "url": "https://www.austin.net.au", "logo_url": "assets/logos/austin.png"},
         ]
         
         for retailer_data in retailers:

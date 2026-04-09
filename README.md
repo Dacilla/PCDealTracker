@@ -1,58 +1,44 @@
 # PCDealTracker
 
-PCDealTracker tracks Australian PC hardware pricing across multiple retailers.
-The project is currently in transition from a legacy scraper-plus-merge system to a persisted `v2` catalog built around retailer listings, canonical products, offers, and price observations.
+PCDealTracker tracks Australian PC hardware prices across multiple retailers and exposes a persisted `v2` catalog for browsing, filtering, history, and trend analysis.
 
 ## Overview
 
 - Backend: FastAPI + SQLAlchemy
 - Frontend: React + Vite + TypeScript
 - Databases: SQLite for local development, PostgreSQL for containerized/runtime use
-- Scraping: Selenium / undetected-chromedriver in the legacy layer, with native `v2` ingestion being rolled out retailer by retailer
+- Scraping: Selenium / undetected-chromedriver feeding the persisted `v2` catalog directly
 
 ## Current Status
 
 ### Done
 
-- Repaired major legacy blockers that previously made the repo unreliable:
-  - broken merged-product endpoint file
-  - broken merged-product rebuild path
-  - config crash on invalid `DEBUG` values
-  - import-time schema creation and Redis flush side effects
-  - inconsistent local frontend/backend host assumptions
-  - flaky API tests caused by in-memory SQLite lifecycle issues
-- Added a persisted `v2` schema with Alembic migrations.
-- Added `v2` API endpoints for products, offers, history, filters, and trends.
+- Rebuilt the project around a persisted `v2` catalog.
+- Added Alembic migrations for the `v2` schema.
+- Added `v2` API endpoints for products, offers, history, filters, trends, scrape runs, and match decisions.
 - Replaced the old single-file frontend with a React/Vite/TypeScript frontend.
-- Added native `v2` ingestion paths for:
+- Added a frontend operations view for scrape runs and manual review of `needs_review` match decisions.
+- Migrated all active retailers to direct `v2` ingestion:
   - Centre Com
   - Computer Alliance
-  - Shopping Express
-  - Scorptec
   - JW Computers
-- Updated the legacy backfill so those native-`v2` retailers are excluded by default.
+  - MSY
+  - PC Case Gear
+  - Scorptec
+  - Shopping Express
+  - Umart
+- Added fixture-based scraper contract tests and direct ingestion tests for the native scrapers.
+- Removed the legacy v1 API, merge pipeline, backfill bridge, and deprecated legacy scraper modules.
 
 ### Still To Do
 
-- Port the remaining retailers off the legacy `Product` bridge and into native `v2` ingestion.
-- Add fixture-based scraper contract tests so parser changes do not depend on live sites.
-- Reduce dependence on the old Selenium-heavy scraper layer.
-- Add clearer operational tooling around scrape runs, ambiguous matches, and manual review.
-- Keep evolving the persisted catalog and matching pipeline so more logic moves out of read-time derivation.
+- Add stronger reviewer workflows such as bulk actions, audit history, and better candidate ranking for manual matches.
+- Keep expanding fixture coverage to broader crawl and pagination edge cases.
+- Reduce Selenium dependence over time where retailer markup allows lighter adapters.
 
 ## Architecture
 
-### Legacy Flow
-
-```text
-Retailer scraper
-  -> Product
-  -> PriceHistory
-  -> merged product rebuild
-  -> legacy API
-```
-
-### `v2` Flow
+### Data Flow
 
 ```text
 Retailer scraper
@@ -64,12 +50,12 @@ Retailer scraper
   -> /api/v2/*
 ```
 
-### Key `v2` Models
+### Core Models
 
 - `CanonicalProduct`: persisted grouped product identity
 - `RetailerListing`: raw retailer listing record
 - `Offer`: retailer offer attached to a canonical product
-- `PriceObservation`: time-series price/in-stock observation
+- `PriceObservation`: time-series price and stock observation
 - `ScrapeRun`: scrape execution metadata
 - `MatchDecision`: record of how a listing was attached to a canonical product
 
@@ -94,7 +80,7 @@ alembic/
 - Python 3.13+ recommended
 - Node.js 20+ recommended
 - A local virtual environment for backend dependencies
-- Chrome/Chromium compatible with the Selenium setup if running scrapers
+- Chrome or Chromium compatible with the Selenium setup if running scrapers
 
 ## Local Development
 
@@ -111,8 +97,10 @@ uvicorn backend.app.main:app --reload
 Backend URLs:
 
 - API docs: `http://localhost:8000/docs`
-- Legacy API: `http://localhost:8000/api/v1/*`
 - `v2` API: `http://localhost:8000/api/v2/*`
+- Scrape runs: `http://localhost:8000/api/v2/scrape-runs`
+- Match decisions: `http://localhost:8000/api/v2/match-decisions`
+- Match decision resolution: `PATCH http://localhost:8000/api/v2/match-decisions/{id}`
 
 ### Frontend
 
@@ -157,26 +145,9 @@ Current `v2` tables created by migration:
 - `scrape_runs`
 - `match_decisions`
 
-## Backfill
-
-To populate the persisted `v2` catalog from legacy `products` and `price_history` data:
-
-```bash
-venv\Scripts\activate
-python scripts/backfill_v2_catalog.py
-```
-
-By default, this excludes retailers that already have native `v2` ingestion.
-
-If you explicitly want to include those retailers through the old bridge:
-
-```bash
-python scripts/backfill_v2_catalog.py --include-native-v2
-```
-
 ## Scraping Workflow
 
-Run the full scraper pipeline:
+Run the scraper pipeline:
 
 ```bash
 venv\Scripts\activate
@@ -185,11 +156,9 @@ python scripts/run_scraper.py
 
 Current scrape flow:
 
-1. Run the legacy retailer scrapers.
-2. Rebuild legacy merged products.
-3. Backfill the persisted `v2` catalog from the remaining legacy retailers.
-4. Refresh native-`v2` retailers directly through their persisted ingestion paths.
-5. Clear API cache.
+1. Run native `v2` retailer scrapers concurrently.
+2. Persist listing, offer, observation, and match updates directly into the `v2` catalog.
+3. Clear API cache.
 
 ## Testing
 
@@ -203,35 +172,28 @@ pytest backend/tests/
 Notes:
 
 - API tests use temporary SQLite database files instead of `:memory:`.
-- Current coverage includes API behavior, parsing helpers, `v2` ingestion paths, and schema/backfill behavior.
+- Coverage includes API behavior, parsing helpers, scraper contract fixtures, ingestion paths, scrape-run orchestration, and schema/migration behavior.
 
-## Native `v2` Coverage
-
-Retailers currently on native `v2` ingestion:
+## Supported Retailers
 
 - Centre Com
 - Computer Alliance
-- Shopping Express
-- Scorptec
 - JW Computers
-
-Retailers still relying on the legacy scrape + backfill bridge:
-
-- PCCG
 - MSY
+- PC Case Gear
+- Scorptec
+- Shopping Express
 - Umart
-- Any temporarily disabled retailer paths such as Austin
 
 ## Known Limits
 
-- The repo still contains a large amount of legacy code and scraper logic.
-- Several retailers still depend on the old `Product`/`PriceHistory` path.
-- Scraper testing is not yet fixture-driven for all retailers.
-- Selenium remains the dominant scraping mechanism, which is slower and more fragile than a more modern adapter approach.
+- Scraping still depends on Selenium, which is slower and more fragile than lighter HTML-first adapters.
+- Manual review exists now, but it is still a lightweight workflow rather than a full moderation tool.
+- Fixture coverage is much better than before, but not every retailer-specific crawl edge case is locked down yet.
 
 ## Recommended Next Work
 
-1. Port `Umart` or `MSY` to native `v2` ingestion.
-2. Add saved HTML fixtures and contract tests for the migrated retailers.
-3. Keep shrinking the legacy bridge until the old `Product` path is no longer the source of truth.
-4. Add better operational visibility for scrape runs and reviewable matching decisions.
+1. Improve the operations view with bulk review actions and better canonical candidate ranking.
+2. Expand full-page scraper fixtures and pagination coverage for every retailer.
+3. Add more operational reporting around scrape health and stale retailers.
+4. Start replacing Selenium-heavy flows where stable HTML requests are sufficient.

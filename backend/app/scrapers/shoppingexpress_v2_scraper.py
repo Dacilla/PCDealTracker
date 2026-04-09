@@ -31,6 +31,23 @@ SCRAPE_TASKS = [
 ]
 
 
+def get_shoppingexpress_next_page_url(soup, base_url: str, current_url: str) -> str | None:
+    next_page_element = soup.select_one("ul.pagination li:last-child a")
+    if not next_page_element:
+        return None
+
+    href = next_page_element.get("href")
+    if not href or "javascript:void" in href:
+        return None
+
+    next_page_url = urljoin(base_url, href)
+    if next_page_url == current_url:
+        return None
+    if not next_page_element.find("i", class_="fa-chevron-right"):
+        return None
+    return next_page_url
+
+
 def parse_shoppingexpress_listing(item: Tag, base_url: str) -> V2ListingSnapshot | None:
     link_element = item.select_one(".caption a")
     price_element = item.select_one("p.price span")
@@ -123,18 +140,10 @@ class ShoppingExpressV2Scraper(BaseScraper):
                     print(f"Found {len(product_list)} products on this page.")
                     self.ingest_items(product_list, category_obj)
 
-                    next_page_element = soup.select_one("ul.pagination li:last-child a")
-                    if next_page_element and next_page_element.get("href") and "javascript:void" not in next_page_element.get("href"):
-                        next_page_url = urljoin(self.base_url, next_page_element["href"])
-                        if next_page_url == current_url:
-                            print("Next page URL is the same as current. Finished with this category.")
-                            break
-                        if not next_page_element.find("i", class_="fa-chevron-right"):
-                            print("No 'Next Page' chevron found. Finished with this category.")
-                            current_url = None
-                        else:
-                            current_url = next_page_url
-                            time.sleep(2)
+                    next_page_url = get_shoppingexpress_next_page_url(soup, self.base_url, current_url)
+                    if next_page_url:
+                        current_url = next_page_url
+                        time.sleep(2)
                     else:
                         print("No 'Next Page' link found. Finished with this category.")
                         current_url = None

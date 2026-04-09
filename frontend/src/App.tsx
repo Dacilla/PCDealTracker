@@ -1,5 +1,5 @@
 import { useDeferredValue, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   CartesianGrid,
   Legend,
@@ -11,10 +11,29 @@ import {
   YAxis
 } from "recharts";
 
-import { fetchFilters, fetchHistory, fetchProduct, fetchProducts, fetchTrends, getApiBase } from "./api";
-import type { HistoryPayload, ProductSummary, Trend } from "./types";
+import {
+  fetchFilters,
+  fetchHistory,
+  fetchMatchCandidates,
+  fetchMatchDecisions,
+  fetchProduct,
+  fetchProducts,
+  fetchScrapeRuns,
+  fetchTrends,
+  getApiBase,
+  resolveMatchDecision
+} from "./api";
+import type {
+  HistoryPayload,
+  MatchCandidate,
+  MatchDecision,
+  MatchDecisionResolutionPayload,
+  ProductSummary,
+  ScrapeRun,
+  Trend
+} from "./types";
 
-type View = "products" | "trends";
+type View = "products" | "trends" | "operations";
 
 const COLORS = ["#d94f04", "#006d77", "#7b2cbf", "#2a9d8f", "#bc4749", "#1d3557"];
 
@@ -27,6 +46,13 @@ function formatCurrency(value?: number | null) {
     currency: "AUD",
     maximumFractionDigits: 0
   }).format(value);
+}
+
+function formatTimestamp(value?: string | null) {
+  if (!value) {
+    return "N/A";
+  }
+  return new Date(value).toLocaleString();
 }
 
 function buildChartRows(history?: HistoryPayload) {
@@ -103,7 +129,182 @@ function TrendsPanel({ trends, onSelect }: { trends: Trend[]; onSelect: (product
   );
 }
 
+function ReviewCard({
+  decision,
+  onResolve,
+  isResolving
+}: {
+  decision: MatchDecision;
+  onResolve: (decisionId: number, payload: MatchDecisionResolutionPayload) => void;
+  isResolving: boolean;
+}) {
+  const [candidateSearch, setCandidateSearch] = useState(decision.retailer_listing.title);
+  const [resolutionNote, setResolutionNote] = useState("");
+  const deferredCandidateSearch = useDeferredValue(candidateSearch.trim());
+
+  const candidatesQuery = useQuery({
+    queryKey: ["review-candidates", decision.id, deferredCandidateSearch, decision.retailer_listing.category?.id],
+    queryFn: () => fetchMatchCandidates(decision.id, { search: deferredCandidateSearch || undefined, limit: 6 })
+  });
+
+  return (
+    <article className="review-card">
+      <div className="card-meta">
+        <span>{decision.retailer_listing.category?.name ?? "Uncategorised"}</span>
+        <span>{decision.retailer_listing.retailer.name}</span>
+      </div>
+      <h3>{decision.retailer_listing.title}</h3>
+      <p className="fingerprint">{decision.fingerprint ?? "No fingerprint captured"}</p>
+      <a href={decision.retailer_listing.source_url} target="_blank" rel="noreferrer" className="review-link">
+        Open retailer listing
+      </a>
+
+      <div className="review-controls">
+        <label htmlFor={`candidate-search-${decision.id}`}>Candidate search</label>
+        <input
+          id={`candidate-search-${decision.id}`}
+          value={candidateSearch}
+          onChange={(event) => setCandidateSearch(event.target.value)}
+          placeholder="Search canonical products..."
+        />
+      </div>
+
+      <div className="review-controls">
+        <label htmlFor={`resolution-note-${decision.id}`}>Resolution note</label>
+        <input
+          id={`resolution-note-${decision.id}`}
+          value={resolutionNote}
+          onChange={(event) => setResolutionNote(event.target.value)}
+          placeholder="Optional reviewer rationale"
+        />
+      </div>
+
+      <div className="candidate-list">
+        {candidatesQuery.isLoading ? <p className="panel-message">Loading candidate products...</p> : null}
+        {!candidatesQuery.isLoading && (candidatesQuery.data?.length ?? 0) === 0 ? (
+          <p className="panel-message">No candidate products matched the current search.</p>
+        ) : null}
+        {candidatesQuery.data?.map((candidate: MatchCandidate) => (
+          <button
+            key={candidate.canonical_product.id}
+            type="button"
+            className="candidate-chip"
+            disabled={isResolving}
+            onClick={() =>
+              onResolve(decision.id, {
+                decision: "manual_matched",
+                canonical_product_id: candidate.canonical_product.id,
+                rationale: resolutionNote || `Matched to ${candidate.canonical_product.canonical_name}`
+              })
+            }
+          >
+            <div className="candidate-copy">
+              <strong>{candidate.canonical_product.canonical_name}</strong>
+              <span>{candidate.reasons.join(" | ")}</span>
+            </div>
+            <div className="candidate-metrics">
+              <strong>{candidate.score.toFixed(1)}</strong>
+              <span>{formatCurrency(candidate.best_price)}</span>
+            </div>
+          </button>
+        ))}
+      </div>
+
+      <div className="review-actions">
+        <button
+          type="button"
+          className="review-action-primary"
+          disabled={isResolving}
+          onClick={() =>
+            onResolve(decision.id, {
+              decision: "manual_rejected",
+              rationale: resolutionNote || "Rejected during manual review"
+            })
+          }
+        >
+          Reject listing
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function OperationsPanel({
+  reviewQueue,
+  scrapeRuns,
+  onResolve,
+  pendingDecisionId,
+  mutationError
+}: {
+  reviewQueue: MatchDecision[];
+  scrapeRuns: ScrapeRun[];
+  onResolve: (decisionId: number, payload: MatchDecisionResolutionPayload) => void;
+  pendingDecisionId?: number;
+  mutationError?: string;
+}) {
+  return (
+    <section className="ops-grid">
+      <div className="ops-column">
+        <div className="ops-header">
+          <div>
+            <p className="eyebrow">Review Queue</p>
+            <h3>Needs review</h3>
+          </div>
+          <strong>{reviewQueue.length}</strong>
+        </div>
+        {mutationError ? <p className="panel-message">{mutationError}</p> : null}
+        <div className="review-list">
+          {reviewQueue.length === 0 ? (
+            <div className="empty-state">
+              <h3>No review items</h3>
+              <p>The current queue is empty.</p>
+            </div>
+          ) : (
+            reviewQueue.map((decision) => (
+              <ReviewCard
+                key={decision.id}
+                decision={decision}
+                onResolve={onResolve}
+                isResolving={pendingDecisionId === decision.id}
+              />
+            ))
+          )}
+        </div>
+      </div>
+
+      <div className="ops-column">
+        <div className="ops-header">
+          <div>
+            <p className="eyebrow">Operations</p>
+            <h3>Recent scrape runs</h3>
+          </div>
+          <strong>{scrapeRuns.length}</strong>
+        </div>
+        <div className="run-list">
+          {scrapeRuns.map((run) => (
+            <article key={run.id} className="run-card">
+              <div className="card-meta">
+                <span>{run.scraper_name ?? "Unknown scraper"}</span>
+                <span>{run.status}</span>
+              </div>
+              <strong>{run.retailer?.name ?? "All retailers"}</strong>
+              <div className="run-metrics">
+                <span>Seen: {run.listings_seen}</span>
+                <span>Created: {run.listings_created}</span>
+                <span>Updated: {run.listings_updated}</span>
+              </div>
+              <p className="panel-message">Started {formatTimestamp(run.started_at)}</p>
+              {run.error_summary ? <p className="panel-message">{run.error_summary}</p> : null}
+            </article>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export default function App() {
+  const queryClient = useQueryClient();
   const [view, setView] = useState<View>("products");
   const [selectedCategoryId, setSelectedCategoryId] = useState<number | undefined>(undefined);
   const [searchInput, setSearchInput] = useState("");
@@ -132,6 +333,16 @@ export default function App() {
     queryFn: fetchTrends
   });
 
+  const reviewQueueQuery = useQuery({
+    queryKey: ["v2-match-decisions", "needs_review"],
+    queryFn: () => fetchMatchDecisions({ decision: "needs_review", limit: 20 })
+  });
+
+  const scrapeRunsQuery = useQuery({
+    queryKey: ["v2-scrape-runs"],
+    queryFn: () => fetchScrapeRuns({ limit: 12 })
+  });
+
   const detailQuery = useQuery({
     queryKey: ["v2-product", selectedProductId],
     queryFn: () => fetchProduct(selectedProductId!),
@@ -144,21 +355,43 @@ export default function App() {
     enabled: Boolean(selectedProductId)
   });
 
+  const resolveDecisionMutation = useMutation({
+    mutationFn: ({ decisionId, payload }: { decisionId: number; payload: MatchDecisionResolutionPayload }) =>
+      resolveMatchDecision(decisionId, payload),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["v2-match-decisions"] }),
+        queryClient.invalidateQueries({ queryKey: ["v2-products"] }),
+        queryClient.invalidateQueries({ queryKey: ["v2-product"] }),
+        queryClient.invalidateQueries({ queryKey: ["v2-history"] }),
+        queryClient.invalidateQueries({ queryKey: ["v2-filters"] }),
+        queryClient.invalidateQueries({ queryKey: ["v2-trends"] })
+      ]);
+    }
+  });
+
   const selectedDetail = detailQuery.data;
   const chartRows = useMemo(() => buildChartRows(historyQuery.data), [historyQuery.data]);
-
   const visibleProducts = productsQuery.data?.products ?? [];
   const visibleTrends = trendsQuery.data ?? [];
+  const reviewQueue = reviewQueueQuery.data ?? [];
+  const scrapeRuns = scrapeRunsQuery.data ?? [];
+  const pendingDecisionId = resolveDecisionMutation.isPending ? resolveDecisionMutation.variables?.decisionId : undefined;
+
+  function handleSelectProduct(productId: string) {
+    setSelectedProductId(productId);
+    setView("products");
+  }
 
   return (
     <div className="app-shell">
       <aside className="sidebar">
         <div>
-          <p className="eyebrow">Rewrite In Progress</p>
+          <p className="eyebrow">V2 Runtime</p>
           <h1>PCDealTracker</h1>
           <p className="lede">
-            V2 browser over the repaired API. Powered by raw retailer listings, grouped offers, and historical price
-            observations.
+            Persisted retailer listings, canonical products, price observations, and a manual review queue for ambiguous
+            matches.
           </p>
         </div>
 
@@ -180,6 +413,9 @@ export default function App() {
             </button>
             <button type="button" className={view === "trends" ? "active" : ""} onClick={() => setView("trends")}>
               Trends
+            </button>
+            <button type="button" className={view === "operations" ? "active" : ""} onClick={() => setView("operations")}>
+              Operations
             </button>
           </div>
         </div>
@@ -217,6 +453,10 @@ export default function App() {
             <strong>{productsQuery.data?.total ?? 0}</strong>
           </div>
           <div>
+            <span>Review queue</span>
+            <strong>{reviewQueue.length}</strong>
+          </div>
+          <div>
             <span>Price floor</span>
             <strong>{formatCurrency(filtersQuery.data?.min_price)}</strong>
           </div>
@@ -227,12 +467,20 @@ export default function App() {
         <header className="content-header">
           <div>
             <p className="eyebrow">Australian Retailer Tracking</p>
-            <h2>{view === "products" ? "Canonical product view" : "Biggest recent drops"}</h2>
+            <h2>
+              {view === "products"
+                ? "Canonical product view"
+                : view === "trends"
+                  ? "Biggest recent drops"
+                  : "Operations and review"}
+            </h2>
           </div>
           <p className="header-copy">
             {view === "products"
-              ? "Grouped offers are derived from the new v2 matching layer rather than the broken legacy merged-product tables."
-              : "Trends are computed from retailer price history over the last 30 days."}
+              ? "Browse the persisted canonical catalog and compare active retailer offers."
+              : view === "trends"
+                ? "Trends are computed from retailer price history over the last 30 days."
+                : "Resolve ambiguous matches and inspect recent scrape runs without leaving the v2 app."}
           </p>
         </header>
 
@@ -248,7 +496,7 @@ export default function App() {
                   key={product.id}
                   product={product}
                   isActive={selectedProductId === product.id}
-                  onSelect={setSelectedProductId}
+                  onSelect={handleSelectProduct}
                 />
               ))}
             </div>
@@ -341,12 +589,24 @@ export default function App() {
               ) : null}
             </aside>
           </section>
-        ) : (
+        ) : null}
+
+        {view === "trends" ? (
           <section className="trend-shell">
             {trendsQuery.isLoading ? <p className="panel-message">Loading trends...</p> : null}
-            {!trendsQuery.isLoading ? <TrendsPanel trends={visibleTrends} onSelect={setSelectedProductId} /> : null}
+            {!trendsQuery.isLoading ? <TrendsPanel trends={visibleTrends} onSelect={handleSelectProduct} /> : null}
           </section>
-        )}
+        ) : null}
+
+        {view === "operations" ? (
+          <OperationsPanel
+            reviewQueue={reviewQueue}
+            scrapeRuns={scrapeRuns}
+            onResolve={(decisionId, payload) => resolveDecisionMutation.mutate({ decisionId, payload })}
+            pendingDecisionId={pendingDecisionId}
+            mutationError={resolveDecisionMutation.error instanceof Error ? resolveDecisionMutation.error.message : undefined}
+          />
+        ) : null}
       </main>
     </div>
   );

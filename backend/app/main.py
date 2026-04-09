@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api import categories, deals, filters, merged_products, price_history, retailers, trends, v2
+from .api import v2
 from .config import settings
 
 
@@ -27,13 +27,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(deals.router)
-app.include_router(price_history.router)
-app.include_router(categories.router)
-app.include_router(retailers.router)
-app.include_router(merged_products.router)
-app.include_router(filters.router)
-app.include_router(trends.router)
 app.include_router(v2.router)
 
 

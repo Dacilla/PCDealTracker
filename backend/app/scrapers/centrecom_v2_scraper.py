@@ -33,6 +33,17 @@ SCRAPE_TASKS = [
 ]
 
 
+def get_centrecom_next_page_url(soup, base_url: str, current_url: str) -> str | None:
+    next_page_element = soup.select_one(".pager .next-page a")
+    if not next_page_element or not next_page_element.get("href"):
+        return None
+
+    next_page_url = urljoin(base_url, next_page_element["href"])
+    if next_page_url == current_url:
+        return None
+    return next_page_url
+
+
 def parse_centrecom_listing(item: Tag, base_url: str) -> V2ListingSnapshot | None:
     name_element = item.select_one(".prbox_name")
     price_element = item.select_one(".saleprice")
@@ -130,11 +141,8 @@ class CentreComV2Scraper(BaseScraper):
                     print(f"Found {len(product_list)} products on this page.")
                     self.ingest_items(product_list, category_obj)
 
-                    next_page_element = soup.select_one(".pager .next-page a")
-                    if next_page_element and next_page_element.get("href"):
-                        next_page_url = urljoin(self.base_url, next_page_element["href"])
-                        if next_page_url == current_url:
-                            break
+                    next_page_url = get_centrecom_next_page_url(soup, self.base_url, current_url)
+                    if next_page_url:
                         current_url = next_page_url
                         time.sleep(2)
                     else:

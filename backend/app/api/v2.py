@@ -6,8 +6,20 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import and_, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from ..database import CanonicalProduct, Category, Offer, PriceObservation, ProductStatus
+from ..database import (
+    CanonicalProduct,
+    Category,
+    MatchDecision,
+    MatchDecisionType,
+    Offer,
+    PriceObservation,
+    ProductStatus,
+    RetailerListing,
+    ScrapeRun,
+    ScrapeRunStatus,
+)
 from ..dependencies import get_db
+from ..services.v2_catalog import rank_match_candidates, resolve_match_decision
 
 
 class V2RetailerSchema(BaseModel):
@@ -88,6 +100,65 @@ class V2TrendSchema(BaseModel):
     price_drop_percentage: float
 
 
+class V2ListingReferenceSchema(BaseModel):
+    id: int
+    title: str
+    source_url: str
+    status: str
+    retailer: V2RetailerSchema
+    category: Optional[V2CategorySchema] = None
+
+
+class V2CanonicalReferenceSchema(BaseModel):
+    id: str
+    canonical_name: str
+    fingerprint: str
+
+
+class V2ScrapeRunSchema(BaseModel):
+    id: int
+    retailer: Optional[V2RetailerSchema] = None
+    started_at: datetime.datetime
+    finished_at: Optional[datetime.datetime] = None
+    status: str
+    trigger_source: Optional[str] = None
+    scraper_name: Optional[str] = None
+    listings_seen: int
+    listings_created: int
+    listings_updated: int
+    error_summary: Optional[str] = None
+    meta: Optional[dict] = None
+
+
+class V2MatchDecisionSchema(BaseModel):
+    id: int
+    decision: str
+    confidence: Optional[float] = None
+    matcher: Optional[str] = None
+    rationale: Optional[str] = None
+    fingerprint: Optional[str] = None
+    created_at: datetime.datetime
+    retailer_listing: V2ListingReferenceSchema
+    canonical_product: Optional[V2CanonicalReferenceSchema] = None
+    scrape_run_id: Optional[int] = None
+
+
+class V2MatchDecisionResolutionRequest(BaseModel):
+    decision: MatchDecisionType
+    canonical_product_id: Optional[str] = None
+    rationale: Optional[str] = None
+
+
+class V2MatchCandidateSchema(BaseModel):
+    canonical_product: V2CanonicalReferenceSchema
+    category: V2CategorySchema
+    brand: Optional[str] = None
+    best_price: Optional[float] = None
+    retailer_count: int
+    score: float
+    reasons: List[str]
+
+
 router = APIRouter(prefix="/api/v2", tags=["V2"])
 
 
@@ -106,6 +177,80 @@ def _serialize_offer(offer: Offer) -> dict:
             and offer.current_price < offer.previous_price
         ),
         "retailer": V2RetailerSchema.model_validate(offer.retailer).model_dump(),
+    }
+
+
+def _serialize_scrape_run(scrape_run: ScrapeRun) -> dict:
+    return {
+        "id": scrape_run.id,
+        "retailer": (
+            V2RetailerSchema.model_validate(scrape_run.retailer).model_dump()
+            if scrape_run.retailer is not None
+            else None
+        ),
+        "started_at": scrape_run.started_at,
+        "finished_at": scrape_run.finished_at,
+        "status": scrape_run.status.value,
+        "trigger_source": scrape_run.trigger_source,
+        "scraper_name": scrape_run.scraper_name,
+        "listings_seen": scrape_run.listings_seen,
+        "listings_created": scrape_run.listings_created,
+        "listings_updated": scrape_run.listings_updated,
+        "error_summary": scrape_run.error_summary,
+        "meta": scrape_run.meta,
+    }
+
+
+def _serialize_match_decision(match_decision: MatchDecision) -> dict:
+    listing: RetailerListing = match_decision.retailer_listing
+    return {
+        "id": match_decision.id,
+        "decision": match_decision.decision.value,
+        "confidence": match_decision.confidence,
+        "matcher": match_decision.matcher,
+        "rationale": match_decision.rationale,
+        "fingerprint": match_decision.fingerprint,
+        "created_at": match_decision.created_at,
+        "retailer_listing": {
+            "id": listing.id,
+            "title": listing.title,
+            "source_url": listing.source_url,
+            "status": listing.status.value,
+            "retailer": V2RetailerSchema.model_validate(listing.retailer).model_dump(),
+            "category": (
+                V2CategorySchema.model_validate(listing.category).model_dump()
+                if listing.category is not None
+                else None
+            ),
+        },
+        "canonical_product": (
+            {
+                "id": str(match_decision.canonical_product.id),
+                "canonical_name": match_decision.canonical_product.canonical_name,
+                "fingerprint": match_decision.canonical_product.fingerprint,
+            }
+            if match_decision.canonical_product is not None
+            else None
+        ),
+        "scrape_run_id": match_decision.scrape_run_id,
+    }
+
+
+def _serialize_match_candidate(candidate) -> dict:
+    priced_offers = [offer for offer in candidate.canonical_product.offers if offer.current_price is not None]
+    best_price = min((offer.current_price for offer in priced_offers), default=None)
+    return {
+        "canonical_product": {
+            "id": str(candidate.canonical_product.id),
+            "canonical_name": candidate.canonical_product.canonical_name,
+            "fingerprint": candidate.canonical_product.fingerprint,
+        },
+        "category": V2CategorySchema.model_validate(candidate.canonical_product.category).model_dump(),
+        "brand": candidate.canonical_product.brand,
+        "best_price": best_price,
+        "retailer_count": len({offer.retailer_id for offer in candidate.canonical_product.offers}),
+        "score": candidate.score,
+        "reasons": candidate.reasons,
     }
 
 
@@ -176,7 +321,7 @@ def _require_persisted_catalog(db: Session) -> None:
     if exists is None:
         raise HTTPException(
             status_code=503,
-            detail="Persisted v2 catalog is empty. Run scripts/backfill_v2_catalog.py or a v2 ingest job first.",
+            detail="Persisted v2 catalog is empty. Run scripts/run_scraper.py or a v2 ingest job first.",
         )
 
 
@@ -209,6 +354,21 @@ def _get_product_or_404(db: Session, product_id: str) -> CanonicalProduct:
     if not product:
         raise HTTPException(status_code=404, detail="Canonical product not found")
     return product
+
+
+def _get_match_decision_or_404(db: Session, decision_id: int) -> MatchDecision:
+    match_decision = db.execute(
+        select(MatchDecision)
+        .options(
+            joinedload(MatchDecision.retailer_listing).joinedload(RetailerListing.retailer),
+            joinedload(MatchDecision.retailer_listing).joinedload(RetailerListing.category),
+            joinedload(MatchDecision.canonical_product),
+        )
+        .where(MatchDecision.id == decision_id)
+    ).scalars().first()
+    if not match_decision:
+        raise HTTPException(status_code=404, detail="Match decision not found")
+    return match_decision
 
 
 @router.get("/products", response_model=V2ProductPageSchema)
@@ -355,3 +515,120 @@ def get_trends(
 
     trends.sort(key=lambda item: item["price_drop_percentage"], reverse=True)
     return trends[:limit]
+
+
+@router.get("/scrape-runs", response_model=List[V2ScrapeRunSchema])
+def list_scrape_runs(
+    db: Session = Depends(get_db),
+    retailer_id: Optional[int] = Query(None),
+    status: Optional[ScrapeRunStatus] = Query(None),
+    limit: int = Query(20, ge=1, le=200),
+):
+    query = (
+        select(ScrapeRun)
+        .options(joinedload(ScrapeRun.retailer))
+        .order_by(ScrapeRun.started_at.desc(), ScrapeRun.id.desc())
+        .limit(limit)
+    )
+    filters = []
+    if retailer_id is not None:
+        filters.append(ScrapeRun.retailer_id == retailer_id)
+    if status is not None:
+        filters.append(ScrapeRun.status == status)
+    if filters:
+        query = query.where(and_(*filters))
+
+    runs = db.execute(query).scalars().all()
+    return [V2ScrapeRunSchema(**_serialize_scrape_run(run)) for run in runs]
+
+
+@router.get("/match-decisions", response_model=List[V2MatchDecisionSchema])
+def list_match_decisions(
+    db: Session = Depends(get_db),
+    decision: Optional[MatchDecisionType] = Query(None),
+    retailer_id: Optional[int] = Query(None),
+    limit: int = Query(50, ge=1, le=500),
+):
+    query = (
+        select(MatchDecision)
+        .options(
+            joinedload(MatchDecision.retailer_listing).joinedload(RetailerListing.retailer),
+            joinedload(MatchDecision.retailer_listing).joinedload(RetailerListing.category),
+            joinedload(MatchDecision.canonical_product),
+        )
+        .order_by(MatchDecision.created_at.desc(), MatchDecision.id.desc())
+        .limit(limit)
+    )
+    filters = []
+    if decision is not None:
+        filters.append(MatchDecision.decision == decision)
+    if retailer_id is not None:
+        filters.append(MatchDecision.retailer_listing.has(RetailerListing.retailer_id == retailer_id))
+    if filters:
+        query = query.where(and_(*filters))
+
+    decisions = db.execute(query).scalars().all()
+    return [V2MatchDecisionSchema(**_serialize_match_decision(item)) for item in decisions]
+
+
+@router.get("/match-decisions/{decision_id}/candidates", response_model=List[V2MatchCandidateSchema])
+def list_match_candidates(
+    decision_id: int,
+    db: Session = Depends(get_db),
+    search: Optional[str] = Query(None),
+    limit: int = Query(8, ge=1, le=25),
+):
+    match_decision = _get_match_decision_or_404(db, decision_id)
+    ranked_candidates = rank_match_candidates(
+        db,
+        listing=match_decision.retailer_listing,
+        search=search,
+        limit=limit,
+    )
+    return [V2MatchCandidateSchema(**_serialize_match_candidate(candidate)) for candidate in ranked_candidates]
+
+
+@router.patch("/match-decisions/{decision_id}", response_model=V2MatchDecisionSchema)
+def patch_match_decision(
+    decision_id: int,
+    payload: V2MatchDecisionResolutionRequest,
+    db: Session = Depends(get_db),
+):
+    if payload.decision not in (MatchDecisionType.MANUAL_MATCHED, MatchDecisionType.MANUAL_REJECTED):
+        raise HTTPException(
+            status_code=400,
+            detail="Only manual_matched and manual_rejected are supported by this endpoint.",
+        )
+
+    match_decision = _get_match_decision_or_404(db, decision_id)
+
+    canonical_product = None
+    if payload.decision == MatchDecisionType.MANUAL_MATCHED:
+        if not payload.canonical_product_id:
+            raise HTTPException(status_code=400, detail="canonical_product_id is required for manual matches.")
+        canonical_product = db.get(CanonicalProduct, int(payload.canonical_product_id))
+        if canonical_product is None:
+            raise HTTPException(status_code=404, detail="Canonical product not found")
+        if (
+            match_decision.retailer_listing.category_id is not None
+            and canonical_product.category_id != match_decision.retailer_listing.category_id
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Canonical product category must match the listing category.",
+            )
+
+    try:
+        resolve_match_decision(
+            db,
+            match_decision=match_decision,
+            decision=payload.decision,
+            canonical_product=canonical_product,
+            rationale=payload.rationale,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    db.commit()
+    refreshed = _get_match_decision_or_404(db, decision_id)
+    return V2MatchDecisionSchema(**_serialize_match_decision(refreshed))

@@ -75,3 +75,62 @@ export type Trend = {
   price_drop_amount: number;
   price_drop_percentage: number;
 };
+
+export type ListingReference = {
+  id: number;
+  title: string;
+  source_url: string;
+  status: string;
+  retailer: Retailer;
+  category?: Category | null;
+};
+
+export type CanonicalReference = {
+  id: string;
+  canonical_name: string;
+  fingerprint: string;
+};
+
+export type MatchDecision = {
+  id: number;
+  decision: string;
+  confidence?: number | null;
+  matcher?: string | null;
+  rationale?: string | null;
+  fingerprint?: string | null;
+  created_at: string;
+  retailer_listing: ListingReference;
+  canonical_product?: CanonicalReference | null;
+  scrape_run_id?: number | null;
+};
+
+export type ScrapeRun = {
+  id: number;
+  retailer?: Retailer | null;
+  started_at: string;
+  finished_at?: string | null;
+  status: string;
+  trigger_source?: string | null;
+  scraper_name?: string | null;
+  listings_seen: number;
+  listings_created: number;
+  listings_updated: number;
+  error_summary?: string | null;
+  meta?: Record<string, unknown> | null;
+};
+
+export type MatchDecisionResolutionPayload = {
+  decision: "manual_matched" | "manual_rejected";
+  canonical_product_id?: string;
+  rationale?: string;
+};
+
+export type MatchCandidate = {
+  canonical_product: CanonicalReference;
+  category: Category;
+  brand?: string | null;
+  best_price?: number | null;
+  retailer_count: number;
+  score: number;
+  reasons: string[];
+};

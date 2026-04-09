@@ -15,8 +15,11 @@ from backend.app.database import (
 from backend.app.scrapers.computeralliance_v2_scraper import parse_computeralliance_listing
 from backend.app.scrapers.centrecom_v2_scraper import parse_centrecom_listing
 from backend.app.scrapers.jw_v2_scraper import parse_jw_listing
+from backend.app.scrapers.msy_v2_scraper import parse_msy_listing
+from backend.app.scrapers.pccg_v2_scraper import parse_pccg_listing
 from backend.app.scrapers.scorptec_v2_scraper import parse_scorptec_listing
 from backend.app.scrapers.shoppingexpress_v2_scraper import parse_shoppingexpress_listing
+from backend.app.scrapers.umart_v2_scraper import parse_umart_listing
 from backend.app.services.v2_catalog import (
     V2ListingSnapshot,
     finish_scrape_run,
@@ -127,6 +130,73 @@ def test_parse_centrecom_listing_extracts_snapshot():
     assert snapshot.url == "https://www.centrecom.com.au/asus-geforce-rtx-5070-dual-oc-12gb"
     assert snapshot.image_url == "https://www.centrecom.com.au/images/5070.jpg"
     assert snapshot.price == 1239.0
+    assert snapshot.status == ProductStatus.AVAILABLE
+
+
+def test_parse_umart_listing_extracts_snapshot():
+    html = """
+    <li class="goods_info">
+      <div class="goods_img"><img content="https://www.umart.com.au/images/5070.jpg" /></div>
+      <div class="goods_name">
+        <a href="/product/asus-rtx-5070-dual-oc" title="ASUS GeForce RTX 5070 DUAL OC 12GB"></a>
+      </div>
+      <div class="goods-price">$1,229.00</div>
+    </li>
+    """
+    item = BeautifulSoup(html, "html.parser").select_one(".goods_info")
+    snapshot = parse_umart_listing(item, "https://www.umart.com.au")
+
+    assert snapshot is not None
+    assert snapshot.name == "ASUS GeForce RTX 5070 DUAL OC 12GB"
+    assert snapshot.url == "https://www.umart.com.au/product/asus-rtx-5070-dual-oc"
+    assert snapshot.image_url == "https://www.umart.com.au/images/5070.jpg"
+    assert snapshot.price == 1229.0
+    assert snapshot.status == ProductStatus.AVAILABLE
+
+
+def test_parse_msy_listing_extracts_snapshot():
+    html = """
+    <li class="goods_info">
+      <div class="goods_img"><img content="https://www.msy.com.au/images/rm850x.jpg" /></div>
+      <div class="goods_name">
+        <a href="/product/corsair-rm850x-shift" title="Corsair RM850x Shift 850W 80 Plus Gold Modular Power Supply"></a>
+      </div>
+      <div class="goods-price">$239.00</div>
+    </li>
+    """
+    item = BeautifulSoup(html, "html.parser").select_one(".goods_info")
+    snapshot = parse_msy_listing(item, "https://www.msy.com.au")
+
+    assert snapshot is not None
+    assert snapshot.name == "Corsair RM850x Shift 850W 80 Plus Gold Modular Power Supply"
+    assert snapshot.url == "https://www.msy.com.au/product/corsair-rm850x-shift"
+    assert snapshot.image_url == "https://www.msy.com.au/images/rm850x.jpg"
+    assert snapshot.price == 239.0
+    assert snapshot.status == ProductStatus.AVAILABLE
+
+
+def test_parse_pccg_listing_extracts_snapshot():
+    html = """
+    <div data-product-card-container>
+      <div data-product-card-image><img src="https://www.pccasegear.com/images/5070.jpg" /></div>
+      <div data-product-card-title><a href="/products/99999/asus-geforce-rtx-5070-dual-oc-12gb">ASUS GeForce RTX 5070 DUAL OC 12GB</a></div>
+      <div data-product-price-current>$1,219.00</div>
+    </div>
+    """
+    item = BeautifulSoup(html, "html.parser").select_one("[data-product-card-container]")
+    snapshot = parse_pccg_listing(
+        item,
+        base_url="https://www.pccasegear.com",
+        name_selector="[data-product-card-title] a",
+        price_selector="[data-product-price-current]",
+        image_selector="[data-product-card-image] img",
+    )
+
+    assert snapshot is not None
+    assert snapshot.name == "ASUS GeForce RTX 5070 DUAL OC 12GB"
+    assert snapshot.url == "https://www.pccasegear.com/products/99999/asus-geforce-rtx-5070-dual-oc-12gb"
+    assert snapshot.image_url == "https://www.pccasegear.com/images/5070.jpg"
+    assert snapshot.price == 1219.0
     assert snapshot.status == ProductStatus.AVAILABLE
 
 
@@ -453,6 +523,177 @@ def test_native_v2_upsert_for_centrecom_snapshot(tmp_path):
         assert canonical.attributes["type"] == "NVMe SSD"
         assert canonical.attributes["capacity_gb"] == 2000
         assert offer.current_price == 249.0
+        assert decision.matcher == "fingerprint"
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_native_v2_upsert_for_umart_snapshot(tmp_path):
+    database_path = tmp_path / "v2_umart.sqlite3"
+    engine = create_engine(f"sqlite:///{database_path}", connect_args={"check_same_thread": False})
+    SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    Base.metadata.create_all(bind=engine)
+
+    session = SessionLocal()
+    try:
+        retailer = Retailer(name="Umart", url="https://www.umart.com.au")
+        category = Category(name="CPUs")
+        session.add_all([retailer, category])
+        session.commit()
+
+        scrape_run = start_scrape_run(
+            session,
+            retailer_id=retailer.id,
+            scraper_name="umart_v2",
+        )
+
+        result = upsert_v2_listing_snapshot(
+            session,
+            scrape_run=scrape_run,
+            retailer_id=retailer.id,
+            category_id=category.id,
+            category_name=category.name,
+            snapshot=V2ListingSnapshot(
+                name="AMD Ryzen 7 7800X3D AM5 Processor",
+                url="https://www.umart.com.au/product/amd-ryzen-7-7800x3d",
+                price=569.0,
+                status=ProductStatus.AVAILABLE,
+                image_url="https://www.umart.com.au/images/7800x3d.jpg",
+            ),
+        )
+        finish_scrape_run(
+            session,
+            scrape_run,
+            status=ScrapeRunStatus.SUCCEEDED,
+            listings_seen=1,
+            listings_created=1,
+            listings_updated=0,
+        )
+        session.commit()
+
+        canonical = session.execute(select(CanonicalProduct)).scalar_one()
+        offer = session.execute(select(Offer)).scalar_one()
+        decision = session.execute(select(MatchDecision)).scalar_one()
+
+        assert result.listing_created is True
+        assert canonical.attributes["socket"] == "AM5"
+        assert canonical.attributes["amd_series"] == "Ryzen 7"
+        assert offer.current_price == 569.0
+        assert decision.matcher == "fingerprint"
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_native_v2_upsert_for_msy_snapshot(tmp_path):
+    database_path = tmp_path / "v2_msy.sqlite3"
+    engine = create_engine(f"sqlite:///{database_path}", connect_args={"check_same_thread": False})
+    SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    Base.metadata.create_all(bind=engine)
+
+    session = SessionLocal()
+    try:
+        retailer = Retailer(name="MSY Technology", url="https://www.msy.com.au")
+        category = Category(name="Power Supplies")
+        session.add_all([retailer, category])
+        session.commit()
+
+        scrape_run = start_scrape_run(
+            session,
+            retailer_id=retailer.id,
+            scraper_name="msy_v2",
+        )
+
+        result = upsert_v2_listing_snapshot(
+            session,
+            scrape_run=scrape_run,
+            retailer_id=retailer.id,
+            category_id=category.id,
+            category_name=category.name,
+            snapshot=V2ListingSnapshot(
+                name="Corsair RM850x Shift 850W 80 Plus Gold Modular Power Supply",
+                url="https://www.msy.com.au/product/corsair-rm850x-shift",
+                price=239.0,
+                status=ProductStatus.AVAILABLE,
+                image_url="https://www.msy.com.au/images/rm850x.jpg",
+            ),
+        )
+        finish_scrape_run(
+            session,
+            scrape_run,
+            status=ScrapeRunStatus.SUCCEEDED,
+            listings_seen=1,
+            listings_created=1,
+            listings_updated=0,
+        )
+        session.commit()
+
+        canonical = session.execute(select(CanonicalProduct)).scalar_one()
+        offer = session.execute(select(Offer)).scalar_one()
+        decision = session.execute(select(MatchDecision)).scalar_one()
+
+        assert result.listing_created is True
+        assert canonical.attributes["wattage"] == 850
+        assert canonical.attributes["rating"] == "80+ Gold"
+        assert offer.current_price == 239.0
+        assert decision.matcher == "fingerprint"
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_native_v2_upsert_for_pccg_snapshot(tmp_path):
+    database_path = tmp_path / "v2_pccg.sqlite3"
+    engine = create_engine(f"sqlite:///{database_path}", connect_args={"check_same_thread": False})
+    SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    Base.metadata.create_all(bind=engine)
+
+    session = SessionLocal()
+    try:
+        retailer = Retailer(name="PC Case Gear", url="https://www.pccasegear.com")
+        category = Category(name="Graphics Cards")
+        session.add_all([retailer, category])
+        session.commit()
+
+        scrape_run = start_scrape_run(
+            session,
+            retailer_id=retailer.id,
+            scraper_name="pccg_v2",
+        )
+
+        result = upsert_v2_listing_snapshot(
+            session,
+            scrape_run=scrape_run,
+            retailer_id=retailer.id,
+            category_id=category.id,
+            category_name=category.name,
+            snapshot=V2ListingSnapshot(
+                name="ASUS GeForce RTX 5070 DUAL OC 12GB",
+                url="https://www.pccasegear.com/products/99999/asus-geforce-rtx-5070-dual-oc-12gb",
+                price=1219.0,
+                status=ProductStatus.AVAILABLE,
+                image_url="https://www.pccasegear.com/images/5070.jpg",
+            ),
+        )
+        finish_scrape_run(
+            session,
+            scrape_run,
+            status=ScrapeRunStatus.SUCCEEDED,
+            listings_seen=1,
+            listings_created=1,
+            listings_updated=0,
+        )
+        session.commit()
+
+        canonical = session.execute(select(CanonicalProduct)).scalar_one()
+        offer = session.execute(select(Offer)).scalar_one()
+        decision = session.execute(select(MatchDecision)).scalar_one()
+
+        assert result.listing_created is True
+        assert canonical.attributes["vram_gb"] == 12
+        assert canonical.attributes["series"] == "RTX"
+        assert offer.current_price == 1219.0
         assert decision.matcher == "fingerprint"
     finally:
         session.close()
