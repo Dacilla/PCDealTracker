@@ -1,4 +1,7 @@
 import type {
+  BulkTopCandidatePayload,
+  BulkTopCandidateResult,
+  DataQualityPayload,
   FilterPayload,
   HealthPayload,
   HistoryPayload,
@@ -36,7 +39,7 @@ async function fetchJson<T>(path: string, params?: Record<string, string | numbe
   return response.json() as Promise<T>;
 }
 
-async function sendJson<T>(method: "PATCH", path: string, body: unknown): Promise<T> {
+async function sendJson<T>(method: "PATCH" | "POST", path: string, body: unknown): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json"
   };
@@ -86,6 +89,10 @@ export function fetchHealth() {
   return fetchJson<HealthPayload>("/health");
 }
 
+export function fetchDataQuality() {
+  return fetchJson<DataQualityPayload>("/data-quality");
+}
+
 export function fetchHistory(productId: string) {
   return fetchJson<HistoryPayload>("/history", { product_id: productId });
 }
@@ -108,4 +115,8 @@ export function fetchMatchCandidates(decisionId: number, params?: Record<string,
 
 export function resolveMatchDecision(decisionId: number, payload: MatchDecisionResolutionPayload) {
   return sendJson<MatchDecision>("PATCH", `/match-decisions/${decisionId}`, payload);
+}
+
+export function bulkApplyTopCandidates(payload: BulkTopCandidatePayload) {
+  return sendJson<BulkTopCandidateResult>("POST", "/match-decisions/bulk-apply-top-candidates", payload);
 }

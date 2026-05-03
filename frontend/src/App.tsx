@@ -11,6 +11,8 @@ import {
 } from "recharts";
 
 import {
+  bulkApplyTopCandidates,
+  fetchDataQuality,
   fetchFilters,
   fetchHealth,
   fetchHistory,
@@ -24,12 +26,14 @@ import {
   resolveMatchDecision
 } from "./api";
 import type {
+  DataQualityPayload,
   HistoryPayload,
   MatchCandidate,
   MatchDecision,
   MatchDecisionResolutionPayload,
   ProductDetail,
   ProductSummary,
+  RetailerHealthSummary,
   ScrapeRun,
   Trend
 } from "./types";
@@ -57,8 +61,19 @@ type NavItem = {
   implemented: boolean;
 };
 
+type LocalPriceAlert = {
+  id: string;
+  productId: string;
+  targetPrice: number;
+  createdAt: string;
+};
+
+type ProductCoverageFilter = "all" | "live" | "gaps";
+
 const REVIEW_PAGE_SIZE = 20;
 const WATCHLIST_STORAGE_KEY = "pcdt-watchlist";
+const COMPARE_STORAGE_KEY = "pcdt-compare";
+const ALERTS_STORAGE_KEY = "pcdt-alerts";
 const SERIES_COLORS = ["#58d4ff", "#4ec89a", "#f5b745", "#ff7a66", "#b988ff", "#8cd6ff"];
 
 const NAV_SECTIONS: Array<{ title: string; items: Screen[] }> = [
@@ -84,18 +99,18 @@ const SCREEN_META: Record<Screen, { title: string; subtitle: string; implemented
   },
   alerts: {
     title: "Price Alerts",
-    subtitle: "The design includes alert management, but the live app does not have persisted alerts yet.",
-    implemented: false
+    subtitle: "Create local target-price alerts against tracked products and see which ones have already triggered.",
+    implemented: true
   },
   compare: {
     title: "Compare",
-    subtitle: "Comparison workflows are planned in the design, but the live app does not expose a dedicated compare flow yet.",
-    implemented: false
+    subtitle: "Compare shortlisted canonical products side by side using live prices, retailers, and parsed attributes.",
+    implemented: true
   },
   products: {
     title: "Products",
-    subtitle: "Canonical product administration is not exposed as a separate live workflow yet.",
-    implemented: false
+    subtitle: "Audit canonical product coverage, focus on rows without live offers, and inspect the underlying grouped catalog entities.",
+    implemented: true
   },
   review: {
     title: "Review Queue",
@@ -104,13 +119,13 @@ const SCREEN_META: Record<Screen, { title: string; subtitle: string; implemented
   },
   dq: {
     title: "Data Quality",
-    subtitle: "The data quality screen from the design is not yet backed by dedicated API surfaces.",
-    implemented: false
+    subtitle: "Track queue pressure, stale coverage, and catalog hygiene issues that need operational attention.",
+    implemented: true
   },
   retailers: {
     title: "Retailers",
-    subtitle: "Retailer-by-retailer operational views are planned, but not yet wired into the frontend.",
-    implemented: false
+    subtitle: "Inspect each retailer's scrape freshness, latest run result, and live offer volume.",
+    implemented: true
   },
   scraper: {
     title: "Scraper Health",
@@ -173,13 +188,30 @@ function statusTone(value?: string | null) {
   if (normalized === "failed" || normalized === "blocked") {
     return "tag tag-red";
   }
-  if (normalized === "partial" || normalized === "degraded" || normalized === "timeout") {
+  if (normalized === "partial" || normalized === "degraded" || normalized === "timeout" || normalized === "stale") {
     return "tag tag-amber";
+  }
+  if (normalized === "running" || normalized === "started") {
+    return "tag tag-cyan";
   }
   if (normalized === "succeeded" || normalized === "ok") {
     return "tag tag-green";
   }
   return "tag tag-muted";
+}
+
+function issueTone(value?: string | null) {
+  const normalized = (value || "").toLowerCase();
+  if (normalized === "critical") {
+    return "tag tag-red";
+  }
+  if (normalized === "warning") {
+    return "tag tag-amber";
+  }
+  if (normalized === "ok") {
+    return "tag tag-green";
+  }
+  return "tag tag-cyan";
 }
 
 function buildChartRows(history?: HistoryPayload) {
@@ -200,18 +232,55 @@ function buildChartRows(history?: HistoryPayload) {
   return Array.from(rows.values());
 }
 
-function readWatchlist() {
+function readStringList(key: string) {
   if (typeof window === "undefined") {
     return [] as string[];
   }
 
   try {
-    const raw = window.localStorage.getItem(WATCHLIST_STORAGE_KEY);
+    const raw = window.localStorage.getItem(key);
     if (!raw) {
       return [];
     }
     const parsed = JSON.parse(raw) as unknown;
     return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function readWatchlist() {
+  return readStringList(WATCHLIST_STORAGE_KEY);
+}
+
+function readCompareList() {
+  return readStringList(COMPARE_STORAGE_KEY);
+}
+
+function readAlerts() {
+  if (typeof window === "undefined") {
+    return [] as LocalPriceAlert[];
+  }
+
+  try {
+    const raw = window.localStorage.getItem(ALERTS_STORAGE_KEY);
+    if (!raw) {
+      return [];
+    }
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed.filter((item): item is LocalPriceAlert => {
+      return Boolean(
+        item &&
+          typeof item === "object" &&
+          typeof (item as LocalPriceAlert).id === "string" &&
+          typeof (item as LocalPriceAlert).productId === "string" &&
+          typeof (item as LocalPriceAlert).targetPrice === "number" &&
+          typeof (item as LocalPriceAlert).createdAt === "string"
+      );
+    });
   } catch {
     return [];
   }
@@ -381,30 +450,47 @@ function ProductCard({
   product,
   active,
   watched,
+  compared,
   onSelect,
-  onToggleWatchlist
+  onToggleWatchlist,
+  onToggleCompare
 }: {
   product: ProductSummary;
   active: boolean;
   watched: boolean;
+  compared: boolean;
   onSelect: (productId: string) => void;
   onToggleWatchlist: (productId: string) => void;
+  onToggleCompare: (productId: string) => void;
 }) {
   return (
     <article className={`product-card ${active ? "active" : ""}`} onClick={() => onSelect(product.id)}>
       <div className="product-card-top">
         <span className="tag tag-muted">{product.category.name}</span>
-        <button
-          type="button"
-          className={`watch-toggle ${watched ? "active" : ""}`}
-          onClick={(event) => {
-            event.stopPropagation();
-            onToggleWatchlist(product.id);
-          }}
-          aria-label={watched ? "Remove from watchlist" : "Add to watchlist"}
-        >
-          <Icon name="star" />
-        </button>
+        <div className="product-action-group">
+          <button
+            type="button"
+            className={`watch-toggle ${compared ? "active" : ""}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggleCompare(product.id);
+            }}
+            aria-label={compared ? "Remove from compare" : "Add to compare"}
+          >
+            <Icon name="compare" />
+          </button>
+          <button
+            type="button"
+            className={`watch-toggle ${watched ? "active" : ""}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggleWatchlist(product.id);
+            }}
+            aria-label={watched ? "Remove from watchlist" : "Add to watchlist"}
+          >
+            <Icon name="star" />
+          </button>
+        </div>
       </div>
       <div className="product-visual">
         <span className="mono">
@@ -431,14 +517,18 @@ function ProductTable({
   products,
   selectedProductId,
   watchlistIds,
+  compareIds,
   onSelect,
-  onToggleWatchlist
+  onToggleWatchlist,
+  onToggleCompare
 }: {
   products: ProductSummary[];
   selectedProductId: string | null;
   watchlistIds: string[];
+  compareIds: string[];
   onSelect: (productId: string) => void;
   onToggleWatchlist: (productId: string) => void;
+  onToggleCompare: (productId: string) => void;
 }) {
   return (
     <div className="panel table-panel">
@@ -472,17 +562,30 @@ function ProductTable({
                 <td className="mono">{formatNumber(product.available_offer_count)}</td>
                 <td>{product.retailers.join(", ")}</td>
                 <td className="table-end">
-                  <button
-                    type="button"
-                    className={`watch-toggle compact ${watchlistIds.includes(product.id) ? "active" : ""}`}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onToggleWatchlist(product.id);
-                    }}
-                    aria-label="Toggle watchlist"
-                  >
-                    <Icon name="star" />
-                  </button>
+                  <div className="table-action-group">
+                    <button
+                      type="button"
+                      className={`watch-toggle compact ${compareIds.includes(product.id) ? "active" : ""}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onToggleCompare(product.id);
+                      }}
+                      aria-label="Toggle compare"
+                    >
+                      <Icon name="compare" />
+                    </button>
+                    <button
+                      type="button"
+                      className={`watch-toggle compact ${watchlistIds.includes(product.id) ? "active" : ""}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onToggleWatchlist(product.id);
+                      }}
+                      aria-label="Toggle watchlist"
+                    >
+                      <Icon name="star" />
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}
@@ -693,6 +796,35 @@ function ReviewDetail({
         </label>
       </div>
 
+      {decision.top_candidate ? (
+        <div className="panel quick-match-panel">
+          <div className="panel-head">
+            <span>Top candidate</span>
+            <span className="mono">{decision.top_candidate.score.toFixed(1)}</span>
+          </div>
+          <div className="quick-match-row">
+            <div>
+              <strong>{decision.top_candidate.canonical_product.canonical_name}</strong>
+              <p className="detail-subcopy">{decision.top_candidate.reasons.join(" · ")}</p>
+            </div>
+            <button
+              type="button"
+              className="btn"
+              disabled={isResolving}
+              onClick={() =>
+                onResolve(decision.id, {
+                  decision: "manual_matched",
+                  canonical_product_id: decision.top_candidate!.canonical_product.id,
+                  rationale: resolutionNote || `Accepted top candidate ${decision.top_candidate!.canonical_product.canonical_name}`
+                })
+              }
+            >
+              Apply top candidate
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       <div className="candidate-stack">
         <div className="panel-head">
           <span>Candidate matches</span>
@@ -747,6 +879,609 @@ function ReviewDetail({
   );
 }
 
+function CompareScreen({
+  products,
+  compareIds,
+  onRemove,
+  onSelectProduct
+}: {
+  products: ProductSummary[];
+  compareIds: string[];
+  onRemove: (productId: string) => void;
+  onSelectProduct: (productId: string) => void;
+}) {
+  const comparedProducts = products.filter((product) => compareIds.includes(product.id));
+  const attributeKeys = Array.from(
+    new Set(comparedProducts.flatMap((product) => Object.keys(product.attributes ?? {})))
+  ).sort((left, right) => left.localeCompare(right));
+
+  if (compareIds.length === 0) {
+    return (
+      <section className="workspace">
+        <div className="panel-empty">
+          No products are selected for comparison yet. Use the compare toggle from Catalog, Deals, or Watchlist.
+        </div>
+      </section>
+    );
+  }
+
+  if (products.length === 0) {
+    return (
+      <section className="workspace">
+        <div className="panel-empty">Loading product data for the compare workspace...</div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="workspace">
+      <div className="compare-grid">
+        {comparedProducts.map((product) => (
+          <article key={product.id} className="panel compare-card">
+            <div className="compare-card-head">
+              <span className="tag tag-muted">{product.category.name}</span>
+              <button type="button" className="watch-toggle compact" onClick={() => onRemove(product.id)}>
+                <Icon name="compare" />
+              </button>
+            </div>
+            <h3>{product.canonical_name}</h3>
+            <p className="product-fingerprint">{product.fingerprint || "No fingerprint captured"}</p>
+            <strong className="price-strong">{formatCurrency(product.best_price)}</strong>
+            <div className="compare-stat-list">
+              <span>{product.best_price_retailer ?? "No active best offer"}</span>
+              <span>{product.available_offer_count} live offers</span>
+              <span>{product.retailers.length} retailers</span>
+              <span>
+                Range {formatCurrency(product.price_range_min)} to {formatCurrency(product.price_range_max)}
+              </span>
+            </div>
+            <button type="button" className="btn" onClick={() => onSelectProduct(product.id)}>
+              Inspect product
+            </button>
+          </article>
+        ))}
+      </div>
+
+      <div className="panel table-panel">
+        <div className="panel-head">
+          <span>Attribute comparison</span>
+          <span className="mono">{comparedProducts.length} products</span>
+        </div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Field</th>
+                {comparedProducts.map((product) => (
+                  <th key={product.id}>{product.canonical_name}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Best price</td>
+                {comparedProducts.map((product) => (
+                  <td key={product.id} className="mono">
+                    {formatCurrency(product.best_price)}
+                  </td>
+                ))}
+              </tr>
+              <tr>
+                <td>Best retailer</td>
+                {comparedProducts.map((product) => (
+                  <td key={product.id}>{product.best_price_retailer ?? "—"}</td>
+                ))}
+              </tr>
+              <tr>
+                <td>Live offers</td>
+                {comparedProducts.map((product) => (
+                  <td key={product.id} className="mono">
+                    {formatNumber(product.available_offer_count)}
+                  </td>
+                ))}
+              </tr>
+              <tr>
+                <td>Retailers</td>
+                {comparedProducts.map((product) => (
+                  <td key={product.id}>{product.retailers.join(", ") || "—"}</td>
+                ))}
+              </tr>
+              {attributeKeys.map((key) => (
+                <tr key={key}>
+                  <td>{key.replaceAll("_", " ")}</td>
+                  {comparedProducts.map((product) => (
+                    <td key={product.id}>{product.attributes[key] !== undefined ? String(product.attributes[key]) : "—"}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function AlertsScreen({
+  alerts,
+  products,
+  watchlistIds,
+  onAddAlert,
+  onDeleteAlert,
+  onSelectProduct
+}: {
+  alerts: LocalPriceAlert[];
+  products: ProductSummary[];
+  watchlistIds: string[];
+  onAddAlert: (productId: string, targetPrice: number) => void;
+  onDeleteAlert: (alertId: string) => void;
+  onSelectProduct: (productId: string) => void;
+}) {
+  const [newProductId, setNewProductId] = useState("");
+  const [targetPriceInput, setTargetPriceInput] = useState("");
+  const productMap = useMemo(() => new Map(products.map((product) => [product.id, product])), [products]);
+  const watchlistProducts = products.filter((product) => watchlistIds.includes(product.id));
+  const alertRows = alerts
+    .map((alert) => {
+      const product = productMap.get(alert.productId);
+      return product ? { alert, product } : null;
+    })
+    .filter((row): row is { alert: LocalPriceAlert; product: ProductSummary } => Boolean(row));
+  const triggeredCount = alertRows.filter(({ alert, product }) => (product.best_price ?? Number.POSITIVE_INFINITY) <= alert.targetPrice).length;
+  const activeCount = alertRows.length - triggeredCount;
+
+  function handleSubmit() {
+    const parsedTarget = Number(targetPriceInput);
+    if (!newProductId || !Number.isFinite(parsedTarget) || parsedTarget <= 0) {
+      return;
+    }
+    onAddAlert(newProductId, parsedTarget);
+    setTargetPriceInput("");
+  }
+
+  return (
+    <section className="workspace">
+      <div className="stats-grid">
+        <StatCard label="Active" value={formatNumber(activeCount)} sublabel="still above target" />
+        <StatCard label="Triggered" value={formatNumber(triggeredCount)} sublabel="target price reached" />
+        <StatCard label="Total alerts" value={formatNumber(alertRows.length)} sublabel="stored in this browser" />
+      </div>
+
+      <div className="panel alert-form-panel">
+        <div className="panel-head">
+          <span>Create alert</span>
+          <span className="mono">Local only</span>
+        </div>
+        <div className="alert-form-grid">
+          <label className="field">
+            <span>Product</span>
+            <select value={newProductId} onChange={(event) => setNewProductId(event.target.value)} className="toolbar-select">
+              <option value="">Select product</option>
+              {(watchlistProducts.length > 0 ? watchlistProducts : products.slice(0, 200)).map((product) => (
+                <option key={product.id} value={product.id}>
+                  {product.canonical_name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Target price</span>
+            <input
+              value={targetPriceInput}
+              onChange={(event) => setTargetPriceInput(event.target.value)}
+              placeholder="e.g. 899"
+              inputMode="numeric"
+            />
+          </label>
+          <div className="alert-form-actions">
+            <button type="button" className="btn" onClick={handleSubmit}>
+              Add alert
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="panel table-panel">
+        <div className="panel-head">
+          <span>Tracked alerts</span>
+          <span className="mono">{alertRows.length}</span>
+        </div>
+        {alertRows.length === 0 ? (
+          <div className="panel-empty">No price alerts yet. Add one above to track a target price locally.</div>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Product</th>
+                  <th>Current</th>
+                  <th>Target</th>
+                  <th>Gap</th>
+                  <th>Status</th>
+                  <th>Created</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {alertRows.map(({ alert, product }) => {
+                  const currentPrice = product.best_price ?? Number.POSITIVE_INFINITY;
+                  const triggered = currentPrice <= alert.targetPrice;
+                  const gap = Number.isFinite(currentPrice) ? currentPrice - alert.targetPrice : null;
+                  return (
+                    <tr key={alert.id} onClick={() => onSelectProduct(product.id)}>
+                      <td>
+                        <div className="table-product-name">{product.canonical_name}</div>
+                        <div className="table-subcopy mono">{product.category.name}</div>
+                      </td>
+                      <td className="mono">{formatCurrency(product.best_price)}</td>
+                      <td className="mono">{formatCurrency(alert.targetPrice)}</td>
+                      <td className="mono">{gap === null ? "—" : formatCurrency(gap)}</td>
+                      <td>
+                        <span className={triggered ? "tag tag-green" : "tag tag-amber"}>
+                          {triggered ? "Triggered" : "Watching"}
+                        </span>
+                      </td>
+                      <td className="mono">{alert.createdAt}</td>
+                      <td className="table-end">
+                        <button
+                          type="button"
+                          className="btn btn-inline"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onDeleteAlert(alert.id);
+                          }}
+                          aria-label="Delete alert"
+                        >
+                          Remove
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function RetailerHealthTable({
+  retailerSummaries,
+  onOpenRetailers
+}: {
+  retailerSummaries: RetailerHealthSummary[];
+  onOpenRetailers?: () => void;
+}) {
+  return (
+    <div className="panel table-panel">
+      <div className="panel-head">
+        <span>Retailer health</span>
+        {onOpenRetailers ? (
+          <button type="button" className="btn btn-inline" onClick={onOpenRetailers}>
+            Open retailers
+          </button>
+        ) : (
+          <span className="mono">{retailerSummaries.length}</span>
+        )}
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Retailer</th>
+              <th>Health</th>
+              <th>Latest run</th>
+              <th>Last success</th>
+              <th>Age</th>
+              <th>Offers</th>
+              <th>Seen</th>
+            </tr>
+          </thead>
+          <tbody>
+            {retailerSummaries.map((summary) => (
+              <tr key={summary.retailer.id}>
+                <td>
+                  <div className="table-product-name">{summary.retailer.name}</div>
+                  <div className="table-subcopy mono">{summary.latest_scrape_run_scraper_name ?? "No scraper run"}</div>
+                </td>
+                <td>
+                  <span className={statusTone(summary.status)}>{formatStatusLabel(summary.status)}</span>
+                </td>
+                <td className="mono">{formatShortDate(summary.latest_scrape_run_started_at)}</td>
+                <td className="mono">{formatShortDate(summary.latest_successful_scrape_finished_at)}</td>
+                <td className="mono">
+                  {summary.successful_scrape_age_hours === undefined || summary.successful_scrape_age_hours === null
+                    ? "—"
+                    : `${summary.successful_scrape_age_hours}h`}
+                </td>
+                <td className="mono">{formatNumber(summary.active_offer_count)}</td>
+                <td className="mono">{formatNumber(summary.latest_scrape_run_listings_seen)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function DataQualityScreen({
+  dataQuality,
+  loading,
+  onOpenReview,
+  onOpenRetailers
+}: {
+  dataQuality?: DataQualityPayload;
+  loading: boolean;
+  onOpenReview: () => void;
+  onOpenRetailers: () => void;
+}) {
+  if (loading && !dataQuality) {
+    return <div className="panel-empty">Loading data quality metrics...</div>;
+  }
+
+  if (!dataQuality) {
+    return <div className="panel-empty">Data quality metrics are unavailable right now.</div>;
+  }
+
+  return (
+    <section className="workspace">
+      <div className="stats-grid">
+        <StatCard
+          label="Review Queue"
+          value={formatNumber(dataQuality.review_queue_count)}
+          sublabel="pending decisions"
+        />
+        <StatCard
+          label="High Confidence"
+          value={formatNumber(dataQuality.high_confidence_review_count)}
+          sublabel="90%+ matcher confidence"
+        />
+        <StatCard
+          label="Stale Offers"
+          value={formatNumber(dataQuality.stale_offer_count)}
+          sublabel={`${dataQuality.stale_offer_threshold_days}+ days old`}
+        />
+        <StatCard
+          label="Unpriced Offers"
+          value={formatNumber(dataQuality.unpriced_active_offer_count)}
+          sublabel="available without current price"
+        />
+        <StatCard
+          label="Uncategorised"
+          value={formatNumber(dataQuality.uncategorized_listing_count)}
+          sublabel="available retailer listings"
+        />
+        <StatCard
+          label="Stale Retailers"
+          value={formatNumber(dataQuality.stale_retailer_count)}
+          sublabel="failed, stale, or never run"
+        />
+      </div>
+
+      <div className="panel table-panel issue-panel">
+        <div className="panel-head">
+          <span>Operational issues</span>
+          <div className="panel-head-actions">
+            <button type="button" className="btn btn-inline" onClick={onOpenReview}>
+              Open review queue
+            </button>
+            <button type="button" className="btn btn-inline" onClick={onOpenRetailers}>
+              Open retailers
+            </button>
+          </div>
+        </div>
+        <div className="issue-grid">
+          {dataQuality.issues.map((issue) => (
+            <article key={issue.key} className="panel issue-card">
+              <div className="compare-card-head">
+                <strong className="table-product-name">{issue.label}</strong>
+                <span className={issueTone(issue.severity)}>{formatStatusLabel(issue.severity)}</span>
+              </div>
+              <div className="issue-count mono">{formatNumber(issue.count)}</div>
+              <p className="detail-subcopy">{issue.detail}</p>
+            </article>
+          ))}
+        </div>
+      </div>
+
+      <div className="dq-grid">
+        <div className="panel table-panel">
+          <div className="panel-head">
+            <span>Queue by retailer</span>
+            <span className="mono">{dataQuality.retailer_queue.length}</span>
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Retailer</th>
+                  <th>Pending</th>
+                  <th>High confidence</th>
+                  <th>Low confidence</th>
+                  <th>Live offers</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dataQuality.retailer_queue.map((row) => (
+                  <tr key={row.retailer.id}>
+                    <td>
+                      <div className="table-product-name">{row.retailer.name}</div>
+                      <div className="table-subcopy mono">{row.retailer.url}</div>
+                    </td>
+                    <td className="mono">{formatNumber(row.pending_review_count)}</td>
+                    <td className="mono">{formatNumber(row.high_confidence_review_count)}</td>
+                    <td className="mono">{formatNumber(row.low_confidence_review_count)}</td>
+                    <td className="mono">{formatNumber(row.active_offer_count)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="panel table-panel">
+          <div className="panel-head">
+            <span>Queue by category</span>
+            <span className="mono">{dataQuality.category_queue.length}</span>
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Category</th>
+                  <th>Pending</th>
+                  <th>High confidence</th>
+                  <th>Live offers</th>
+                  <th>Canonical</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dataQuality.category_queue.map((row) => (
+                  <tr key={row.category?.id ?? "uncategorised"}>
+                    <td>
+                      <div className="table-product-name">{row.category?.name ?? "Uncategorised"}</div>
+                    </td>
+                    <td className="mono">{formatNumber(row.pending_review_count)}</td>
+                    <td className="mono">{formatNumber(row.high_confidence_review_count)}</td>
+                    <td className="mono">{formatNumber(row.active_offer_count)}</td>
+                    <td className="mono">{formatNumber(row.canonical_product_count)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ProductsScreen({
+  products,
+  loading,
+  selectedProductId,
+  onSelectProduct,
+  detail,
+  history,
+  detailLoading
+}: {
+  products: ProductSummary[];
+  loading: boolean;
+  selectedProductId: string | null;
+  onSelectProduct: (productId: string) => void;
+  detail?: ProductDetail;
+  history?: HistoryPayload;
+  detailLoading: boolean;
+}) {
+  const liveCoverageCount = products.filter((product) => product.available_offer_count > 0).length;
+  const gapCount = products.filter((product) => product.available_offer_count === 0).length;
+  const singleRetailerCount = products.filter((product) => product.retailers.length <= 1).length;
+
+  return (
+    <section className="workspace workspace-split">
+      <div className="workspace-primary">
+        <div className="stats-grid">
+          <StatCard
+            label="Canonical Products"
+            value={formatNumber(products.length)}
+            sublabel="rows in current admin view"
+          />
+          <StatCard
+            label="Live Coverage"
+            value={formatNumber(liveCoverageCount)}
+            sublabel="products with active offers"
+          />
+          <StatCard
+            label="Coverage Gaps"
+            value={formatNumber(gapCount)}
+            sublabel="products without live offers"
+          />
+          <StatCard
+            label="Single Retailer"
+            value={formatNumber(singleRetailerCount)}
+            sublabel="canonical rows with 1 source"
+          />
+        </div>
+
+        <div className="panel table-panel">
+          <div className="panel-head">
+            <span>Canonical coverage</span>
+            <span className="mono">{formatNumber(products.length)}</span>
+          </div>
+          {loading ? <div className="panel-empty">Loading canonical products...</div> : null}
+          {!loading && products.length === 0 ? (
+            <div className="panel-empty">No canonical products matched the current admin filters.</div>
+          ) : null}
+          {!loading && products.length > 0 ? (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Canonical product</th>
+                    <th>Status</th>
+                    <th>Category</th>
+                    <th>Best price</th>
+                    <th>Live offers</th>
+                    <th>Total offers</th>
+                    <th>Retailers</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {products.map((product) => {
+                    const status =
+                      product.available_offer_count === 0
+                        ? "gap"
+                        : product.retailers.length <= 1
+                          ? "thin"
+                          : "covered";
+                    return (
+                      <tr
+                        key={product.id}
+                        className={selectedProductId === product.id ? "row-active" : ""}
+                        onClick={() => onSelectProduct(product.id)}
+                      >
+                        <td>
+                          <div className="table-product-name">{product.canonical_name}</div>
+                          <div className="table-subcopy mono">{product.fingerprint || "No fingerprint"}</div>
+                        </td>
+                        <td>
+                          <span
+                            className={
+                              status === "gap"
+                                ? "tag tag-red"
+                                : status === "thin"
+                                  ? "tag tag-amber"
+                                  : "tag tag-green"
+                            }
+                          >
+                            {status === "gap" ? "No live offers" : status === "thin" ? "Thin coverage" : "Covered"}
+                          </span>
+                        </td>
+                        <td>
+                          <span className="tag tag-muted">{product.category.name}</span>
+                        </td>
+                        <td className="mono">{formatCurrency(product.best_price)}</td>
+                        <td className="mono">{formatNumber(product.available_offer_count)}</td>
+                        <td className="mono">{formatNumber(product.offer_count)}</td>
+                        <td>{product.retailers.length > 0 ? product.retailers.join(", ") : "—"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      <ProductDetailPanel detail={detail} history={history} loading={detailLoading} />
+    </section>
+  );
+}
+
 function PlaceholderScreen({ screen }: { screen: Screen }) {
   return (
     <section className="placeholder-screen">
@@ -771,10 +1506,14 @@ export default function App() {
   const [reviewSearchInput, setReviewSearchInput] = useState("");
   const [selectedCategoryId, setSelectedCategoryId] = useState<number | undefined>(undefined);
   const [reviewCategoryId, setReviewCategoryId] = useState<number | undefined>(undefined);
+  const [productCoverageFilter, setProductCoverageFilter] = useState<ProductCoverageFilter>("all");
+  const [reviewSortBy, setReviewSortBy] = useState("confidence_desc");
   const [reviewQueueOffset, setReviewQueueOffset] = useState(0);
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
   const [selectedReviewId, setSelectedReviewId] = useState<number | null>(null);
   const [watchlistIds, setWatchlistIds] = useState<string[]>(() => readWatchlist());
+  const [compareIds, setCompareIds] = useState<string[]>(() => readCompareList());
+  const [alerts, setAlerts] = useState<LocalPriceAlert[]>(() => readAlerts());
   const deferredSearch = useDeferredValue(searchInput.trim());
   const deferredReviewSearch = useDeferredValue(reviewSearchInput.trim());
 
@@ -784,6 +1523,18 @@ export default function App() {
     }
   }, [watchlistIds]);
 
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(COMPARE_STORAGE_KEY, JSON.stringify(compareIds));
+    }
+  }, [compareIds]);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(ALERTS_STORAGE_KEY, JSON.stringify(alerts));
+    }
+  }, [alerts]);
+
   const filtersQuery = useQuery({
     queryKey: ["v2-filters", selectedCategoryId],
     queryFn: () => fetchFilters(selectedCategoryId)
@@ -792,6 +1543,12 @@ export default function App() {
   const healthQuery = useQuery({
     queryKey: ["v2-health"],
     queryFn: fetchHealth
+  });
+
+  const dataQualityQuery = useQuery({
+    queryKey: ["v2-data-quality"],
+    queryFn: fetchDataQuality,
+    enabled: screen === "dq"
   });
 
   const productsQuery = useQuery({
@@ -806,18 +1563,45 @@ export default function App() {
       })
   });
 
+  const allProductsQuery = useQuery({
+    queryKey: ["v2-products-all"],
+    queryFn: () =>
+      fetchProducts({
+        hide_unavailable: true,
+        page: 1,
+        page_size: 2500
+      }),
+    enabled: screen === "watchlist" || screen === "compare" || screen === "alerts" || compareIds.length > 0 || alerts.length > 0
+  });
+
+  const productsAdminQuery = useQuery({
+    queryKey: ["v2-products-admin", deferredSearch, selectedCategoryId],
+    queryFn: () =>
+      fetchProducts({
+        search: deferredSearch || undefined,
+        category_id: selectedCategoryId,
+        hide_unavailable: false,
+        sort_by: "name",
+        sort_order: "asc",
+        page: 1,
+        page_size: 2500
+      }),
+    enabled: screen === "products"
+  });
+
   const trendsQuery = useQuery({
     queryKey: ["v2-trends"],
     queryFn: fetchTrends
   });
 
   const reviewQueueQuery = useQuery({
-    queryKey: ["v2-match-decisions", "needs_review", deferredReviewSearch, reviewCategoryId, reviewQueueOffset],
+    queryKey: ["v2-match-decisions", "needs_review", deferredReviewSearch, reviewCategoryId, reviewSortBy, reviewQueueOffset],
     queryFn: () =>
       fetchMatchDecisions({
         decision: "needs_review",
         search: deferredReviewSearch || undefined,
         category_id: reviewCategoryId,
+        sort_by: reviewSortBy,
         limit: REVIEW_PAGE_SIZE,
         offset: reviewQueueOffset
       })
@@ -848,25 +1632,56 @@ export default function App() {
         queryClient.invalidateQueries({ queryKey: ["v2-match-decisions"] }),
         queryClient.invalidateQueries({ queryKey: ["v2-health"] }),
         queryClient.invalidateQueries({ queryKey: ["v2-products"] }),
+        queryClient.invalidateQueries({ queryKey: ["v2-products-admin"] }),
         queryClient.invalidateQueries({ queryKey: ["v2-product"] }),
         queryClient.invalidateQueries({ queryKey: ["v2-history"] }),
         queryClient.invalidateQueries({ queryKey: ["v2-filters"] }),
         queryClient.invalidateQueries({ queryKey: ["v2-trends"] }),
-        queryClient.invalidateQueries({ queryKey: ["v2-scrape-runs"] })
+        queryClient.invalidateQueries({ queryKey: ["v2-scrape-runs"] }),
+        queryClient.invalidateQueries({ queryKey: ["v2-data-quality"] })
+      ]);
+    }
+  });
+
+  const bulkTopCandidateMutation = useMutation({
+    mutationFn: (decisionIds: number[]) =>
+      bulkApplyTopCandidates({
+        decision_ids: decisionIds,
+        min_score: 95.0,
+      }),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["v2-match-decisions"] }),
+        queryClient.invalidateQueries({ queryKey: ["v2-health"] }),
+        queryClient.invalidateQueries({ queryKey: ["v2-products"] }),
+        queryClient.invalidateQueries({ queryKey: ["v2-products-admin"] }),
+        queryClient.invalidateQueries({ queryKey: ["v2-product"] }),
+        queryClient.invalidateQueries({ queryKey: ["v2-history"] }),
+        queryClient.invalidateQueries({ queryKey: ["v2-filters"] }),
+        queryClient.invalidateQueries({ queryKey: ["v2-trends"] }),
+        queryClient.invalidateQueries({ queryKey: ["v2-scrape-runs"] }),
+        queryClient.invalidateQueries({ queryKey: ["v2-data-quality"] })
       ]);
     }
   });
 
   const visibleProducts = productsQuery.data?.products ?? [];
+  const adminProducts = productsAdminQuery.data?.products ?? [];
+  const allProducts = allProductsQuery.data?.products ?? [];
   const visibleTrends = trendsQuery.data ?? [];
   const reviewQueuePage = reviewQueueQuery.data;
   const reviewQueue = reviewQueuePage?.decisions ?? [];
   const scrapeRuns = scrapeRunsQuery.data ?? [];
   const health = healthQuery.data;
+  const dataQuality = dataQualityQuery.data;
+  const retailerSummaries = health?.retailer_summaries ?? [];
   const selectedDetail = detailQuery.data;
   const selectedDecision = reviewQueue.find((decision) => decision.id === selectedReviewId);
   const pendingDecisionId = resolveDecisionMutation.isPending ? resolveDecisionMutation.variables?.decisionId : undefined;
   const reviewQueueTotal = reviewQueuePage?.total ?? health?.review_queue_count ?? reviewQueue.length;
+  const bulkEligibleDecisionIds = reviewQueue
+    .filter((decision) => (decision.top_candidate?.score ?? 0) >= 95)
+    .map((decision) => decision.id);
 
   useEffect(() => {
     if (reviewQueue.length === 0) {
@@ -879,25 +1694,50 @@ export default function App() {
   }, [reviewQueue, selectedReviewId]);
 
   const filteredWatchlist = useMemo(() => {
-    return visibleProducts.filter((product) => watchlistIds.includes(product.id));
-  }, [visibleProducts, watchlistIds]);
+    const source = allProducts.length > 0 ? allProducts : visibleProducts;
+    return source.filter((product) => {
+      if (!watchlistIds.includes(product.id)) {
+        return false;
+      }
+      if (selectedCategoryId !== undefined && product.category.id !== selectedCategoryId) {
+        return false;
+      }
+      if (!deferredSearch) {
+        return true;
+      }
+      const haystack = `${product.canonical_name} ${product.fingerprint} ${product.best_price_retailer ?? ""}`.toLowerCase();
+      return haystack.includes(deferredSearch.toLowerCase());
+    });
+  }, [allProducts, visibleProducts, watchlistIds, selectedCategoryId, deferredSearch]);
+
+  const filteredAdminProducts = useMemo(() => {
+    return adminProducts.filter((product) => {
+      if (productCoverageFilter === "live" && product.available_offer_count <= 0) {
+        return false;
+      }
+      if (productCoverageFilter === "gaps" && product.available_offer_count > 0) {
+        return false;
+      }
+      return true;
+    });
+  }, [adminProducts, productCoverageFilter]);
 
   const navItems = useMemo<Record<Screen, NavItem>>(
     () => ({
       catalog: { key: "catalog", label: "Catalog", implemented: true },
       deals: { key: "deals", label: "Deals", implemented: true },
       watchlist: { key: "watchlist", label: "Watchlist", count: filteredWatchlist.length, implemented: true },
-      alerts: { key: "alerts", label: "Price Alerts", implemented: false },
-      compare: { key: "compare", label: "Compare", implemented: false },
-      products: { key: "products", label: "Products", implemented: false },
+      alerts: { key: "alerts", label: "Price Alerts", count: alerts.length, implemented: true },
+      compare: { key: "compare", label: "Compare", count: compareIds.length, implemented: true },
+      products: { key: "products", label: "Products", implemented: true },
       review: { key: "review", label: "Review Queue", count: reviewQueueTotal, implemented: true },
-      dq: { key: "dq", label: "Data Quality", implemented: false },
-      retailers: { key: "retailers", label: "Retailers", implemented: false },
+      dq: { key: "dq", label: "Data Quality", implemented: true },
+      retailers: { key: "retailers", label: "Retailers", implemented: true },
       scraper: { key: "scraper", label: "Scraper Health", implemented: true },
       analytics: { key: "analytics", label: "Analytics", implemented: false },
       settings: { key: "settings", label: "Settings", implemented: false }
     }),
-    [filteredWatchlist.length, reviewQueueTotal]
+    [alerts.length, compareIds.length, filteredWatchlist.length, reviewQueueTotal]
   );
 
   const hasNextReviewPage = reviewQueueOffset + reviewQueue.length < reviewQueueTotal;
@@ -918,6 +1758,30 @@ export default function App() {
     );
   }
 
+  function handleToggleCompare(productId: string) {
+    setCompareIds((current) =>
+      current.includes(productId) ? current.filter((id) => id !== productId) : [...current, productId].slice(-4)
+    );
+  }
+
+  function handleAddAlert(productId: string, targetPrice: number) {
+    setAlerts((current) => {
+      const existing = current.find((alert) => alert.productId === productId && alert.targetPrice === targetPrice);
+      if (existing) {
+        return current;
+      }
+      return [
+        {
+          id: `alert-${Date.now()}-${productId}`,
+          productId,
+          targetPrice,
+          createdAt: new Date().toLocaleDateString("en-AU")
+        },
+        ...current
+      ];
+    });
+  }
+
   function handleReviewSearchChange(value: string) {
     startTransition(() => {
       setReviewSearchInput(value);
@@ -932,8 +1796,15 @@ export default function App() {
     });
   }
 
+  function handleReviewSortChange(value: string) {
+    startTransition(() => {
+      setReviewSortBy(value);
+      setReviewQueueOffset(0);
+    });
+  }
+
   function renderTopbarControls() {
-    if (screen === "catalog" || screen === "deals" || screen === "watchlist") {
+    if (screen === "catalog" || screen === "deals" || screen === "watchlist" || screen === "products") {
       return (
         <>
           <label className="search-wrap">
@@ -959,6 +1830,17 @@ export default function App() {
               </option>
             ))}
           </select>
+          {screen === "products" ? (
+            <select
+              className="toolbar-select"
+              value={productCoverageFilter}
+              onChange={(event) => setProductCoverageFilter(event.target.value as ProductCoverageFilter)}
+            >
+              <option value="all">All coverage</option>
+              <option value="live">Has live offers</option>
+              <option value="gaps">No live offers</option>
+            </select>
+          ) : null}
           {screen === "catalog" ? (
             <div className="toolbar-toggle">
               <button
@@ -1005,7 +1887,11 @@ export default function App() {
               <option key={category.id} value={category.id}>
                 {category.name}
               </option>
-            ))}
+              ))}
+          </select>
+          <select className="toolbar-select" value={reviewSortBy} onChange={(event) => handleReviewSortChange(event.target.value)}>
+            <option value="confidence_desc">High confidence first</option>
+            <option value="created_desc">Newest first</option>
           </select>
           <div className="toolbar-toggle">
             <button type="button" onClick={() => setReviewQueueOffset((current) => Math.max(0, current - REVIEW_PAGE_SIZE))}>
@@ -1051,8 +1937,10 @@ export default function App() {
                     product={product}
                     active={selectedProductId === product.id}
                     watched={watchlistIds.includes(product.id)}
+                    compared={compareIds.includes(product.id)}
                     onSelect={handleSelectProduct}
                     onToggleWatchlist={handleToggleWatchlist}
+                    onToggleCompare={handleToggleCompare}
                   />
                 ))}
               </div>
@@ -1061,8 +1949,10 @@ export default function App() {
                 products={visibleProducts}
                 selectedProductId={selectedProductId}
                 watchlistIds={watchlistIds}
+                compareIds={compareIds}
                 onSelect={handleSelectProduct}
                 onToggleWatchlist={handleToggleWatchlist}
+                onToggleCompare={handleToggleCompare}
               />
             )}
           </div>
@@ -1139,13 +2029,59 @@ export default function App() {
                 products={filteredWatchlist}
                 selectedProductId={selectedProductId}
                 watchlistIds={watchlistIds}
+                compareIds={compareIds}
                 onSelect={handleSelectProduct}
                 onToggleWatchlist={handleToggleWatchlist}
+                onToggleCompare={handleToggleCompare}
               />
             )}
           </div>
           <ProductDetailPanel detail={selectedDetail} history={historyQuery.data} loading={detailQuery.isLoading || historyQuery.isLoading} />
         </section>
+      );
+    }
+
+    if (screen === "compare") {
+      return (
+        <CompareScreen
+          products={allProducts}
+          compareIds={compareIds}
+          onRemove={handleToggleCompare}
+          onSelectProduct={(productId) => {
+            handleSelectProduct(productId);
+            setScreen("catalog");
+          }}
+        />
+      );
+    }
+
+    if (screen === "alerts") {
+      return (
+        <AlertsScreen
+          alerts={alerts}
+          products={allProducts}
+          watchlistIds={watchlistIds}
+          onAddAlert={handleAddAlert}
+          onDeleteAlert={(alertId) => setAlerts((current) => current.filter((alert) => alert.id !== alertId))}
+          onSelectProduct={(productId) => {
+            handleSelectProduct(productId);
+            setScreen("catalog");
+          }}
+        />
+      );
+    }
+
+    if (screen === "products") {
+      return (
+        <ProductsScreen
+          products={filteredAdminProducts}
+          loading={productsAdminQuery.isLoading}
+          selectedProductId={selectedProductId}
+          onSelectProduct={handleSelectProduct}
+          detail={selectedDetail}
+          history={historyQuery.data}
+          detailLoading={detailQuery.isLoading || historyQuery.isLoading}
+        />
       );
     }
 
@@ -1155,12 +2091,33 @@ export default function App() {
           <div className="review-queue-panel panel">
             <div className="panel-head">
               <span>Pending queue</span>
-              <span className="mono">
-                {reviewQueueOffset + 1}-{reviewQueueOffset + reviewQueue.length} / {formatNumber(reviewQueueTotal)}
-              </span>
+              <div className="panel-head-actions">
+                <span className="mono">
+                  {reviewQueueOffset + 1}-{reviewQueueOffset + reviewQueue.length} / {formatNumber(reviewQueueTotal)}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-inline"
+                  disabled={bulkEligibleDecisionIds.length === 0 || bulkTopCandidateMutation.isPending}
+                  onClick={() => bulkTopCandidateMutation.mutate(bulkEligibleDecisionIds)}
+                >
+                  Apply visible top matches ({bulkEligibleDecisionIds.length})
+                </button>
+              </div>
             </div>
             {resolveDecisionMutation.error ? (
               <div className="inline-error">{resolveDecisionMutation.error.message}</div>
+            ) : null}
+            {bulkTopCandidateMutation.error ? (
+              <div className="inline-error">{bulkTopCandidateMutation.error.message}</div>
+            ) : null}
+            {bulkTopCandidateMutation.data ? (
+              <div className="panel-note">
+                Applied {bulkTopCandidateMutation.data.resolved_ids.length} matches
+                {bulkTopCandidateMutation.data.skipped.length > 0
+                  ? `, skipped ${bulkTopCandidateMutation.data.skipped.length}.`
+                  : "."}
+              </div>
             ) : null}
             <div className="queue-list">
               {reviewQueueQuery.isLoading ? <div className="panel-empty">Loading review queue...</div> : null}
@@ -1180,6 +2137,17 @@ export default function App() {
                   </div>
                   <strong>{decision.retailer_listing.title}</strong>
                   <span className="queue-fingerprint mono">{decision.fingerprint ?? "No fingerprint"}</span>
+                  <div className="queue-item-metrics">
+                    <span className="tag tag-muted">
+                      confidence {decision.confidence !== null && decision.confidence !== undefined ? `${Math.round(decision.confidence * 100)}%` : "—"}
+                    </span>
+                    {decision.top_candidate ? <span className="tag tag-green">top {decision.top_candidate.score.toFixed(1)}</span> : null}
+                  </div>
+                  {decision.top_candidate ? (
+                    <span className="queue-top-candidate">
+                      {decision.top_candidate.canonical_product.canonical_name}
+                    </span>
+                  ) : null}
                 </button>
               ))}
             </div>
@@ -1189,6 +2157,73 @@ export default function App() {
             pendingDecisionId={pendingDecisionId}
             onResolve={(decisionId, payload) => resolveDecisionMutation.mutate({ decisionId, payload })}
           />
+        </section>
+      );
+    }
+
+    if (screen === "dq") {
+      return (
+        <DataQualityScreen
+          dataQuality={dataQuality}
+          loading={dataQualityQuery.isLoading}
+          onOpenReview={() => setScreen("review")}
+          onOpenRetailers={() => setScreen("retailers")}
+        />
+      );
+    }
+
+    if (screen === "retailers") {
+      return (
+        <section className="workspace">
+          <div className="stats-grid">
+            <StatCard
+              label="Healthy"
+              value={formatNumber(retailerSummaries.filter((summary) => summary.status === "ok").length)}
+              sublabel="fresh successful coverage"
+            />
+            <StatCard
+              label="Attention"
+              value={formatNumber(retailerSummaries.filter((summary) => summary.status === "failed" || summary.status === "stale").length)}
+              sublabel="failed or stale retailers"
+            />
+            <StatCard
+              label="Running"
+              value={formatNumber(retailerSummaries.filter((summary) => summary.status === "running").length)}
+              sublabel="currently active scrapers"
+            />
+            <StatCard
+              label="Never Run"
+              value={formatNumber(retailerSummaries.filter((summary) => summary.status === "never_run").length)}
+              sublabel="no successful scrape recorded"
+            />
+          </div>
+
+          <RetailerHealthTable retailerSummaries={retailerSummaries} />
+
+          <div className="retailer-card-grid">
+            {retailerSummaries.map((summary) => (
+              <article key={summary.retailer.id} className="panel retailer-card">
+                <div className="compare-card-head">
+                  <strong className="table-product-name">{summary.retailer.name}</strong>
+                  <span className={statusTone(summary.status)}>{formatStatusLabel(summary.status)}</span>
+                </div>
+                <div className="compare-stat-list">
+                  <span>{summary.active_offer_count} live offers</span>
+                  <span>Latest run: {formatTimestamp(summary.latest_scrape_run_started_at)}</span>
+                  <span>Last success: {formatTimestamp(summary.latest_successful_scrape_finished_at)}</span>
+                  <span>
+                    Stale after {summary.stale_after_hours}h
+                    {summary.successful_scrape_age_hours !== undefined && summary.successful_scrape_age_hours !== null
+                      ? ` · now ${summary.successful_scrape_age_hours}h old`
+                      : ""}
+                  </span>
+                </div>
+                {summary.latest_scrape_run_error_summary ? (
+                  <div className="inline-error retailer-inline-error">{summary.latest_scrape_run_error_summary}</div>
+                ) : null}
+              </article>
+            ))}
+          </div>
         </section>
       );
     }
@@ -1234,6 +2269,8 @@ export default function App() {
               <div className="inline-error">{health.latest_scrape_run_error_summary}</div>
             ) : null}
           </div>
+
+          <RetailerHealthTable retailerSummaries={retailerSummaries} onOpenRetailers={() => setScreen("retailers")} />
 
           <div className="panel table-panel">
             <div className="panel-head">

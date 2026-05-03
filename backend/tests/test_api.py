@@ -144,8 +144,21 @@ def populate_db(session_factory):
             loose_normalized_model="legacy gpu",
             status=ProductStatus.UNAVAILABLE,
         )
-        db_session.add_all([listing_1, listing_2, listing_3, listing_4])
+        listing_5 = RetailerListing(
+            retailer_id=retailer_b.id,
+            category_id=None,
+            source_url="http://test.com/p5",
+            source_hash="p5",
+            title="AMD Ryzen 7 7800X3D OEM",
+            brand="AMD",
+            model="Ryzen 7 7800X3D",
+            normalized_model="ryzen 7 7800x3d",
+            loose_normalized_model="ryzen 7 7800x3d oem",
+            status=ProductStatus.AVAILABLE,
+        )
+        db_session.add_all([listing_1, listing_2, listing_3, listing_4, listing_5])
         db_session.commit()
+        now = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
 
         offer_1 = Offer(
             canonical_product_id=gpu_product.id,
@@ -195,12 +208,25 @@ def populate_db(session_factory):
             status=ProductStatus.UNAVAILABLE,
             is_active=False,
         )
-        db_session.add_all([offer_1, offer_2, offer_3, offer_4])
+        offer_5 = Offer(
+            canonical_product_id=cpu_product.id,
+            retailer_listing_id=listing_5.id,
+            retailer_id=retailer_b.id,
+            category_id=cat_cpu.id,
+            listing_name=listing_5.title,
+            listing_url=listing_5.source_url,
+            current_price=None,
+            previous_price=None,
+            status=ProductStatus.AVAILABLE,
+            is_active=True,
+            last_seen_at=now - datetime.timedelta(days=10),
+        )
+        db_session.add_all([offer_1, offer_2, offer_3, offer_4, offer_5])
         db_session.commit()
-
-        now = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
         success_run = ScrapeRun(
             retailer_id=retailer_a.id,
+            started_at=now - datetime.timedelta(hours=2),
+            finished_at=now - datetime.timedelta(hours=1),
             status=ScrapeRunStatus.SUCCEEDED,
             scraper_name="native_seed",
             trigger_source="test",
@@ -210,6 +236,7 @@ def populate_db(session_factory):
         )
         failed_run = ScrapeRun(
             retailer_id=retailer_a.id,
+            started_at=now - datetime.timedelta(minutes=30),
             status=ScrapeRunStatus.FAILED,
             scraper_name="manual_review_probe",
             trigger_source="test",
@@ -323,7 +350,7 @@ def test_v2_health_reports_catalog_and_scrape_state(client, populate_db):
     assert data["retailer_count"] == 2
     assert data["category_count"] == 2
     assert data["canonical_product_count"] == 3
-    assert data["active_offer_count"] == 3
+    assert data["active_offer_count"] == 4
     assert data["review_queue_count"] == 1
     assert data["latest_scrape_run_status"] == "failed"
     assert data["latest_scrape_run_scraper_name"] == "manual_review_probe"
@@ -334,7 +361,63 @@ def test_v2_health_reports_catalog_and_scrape_state(client, populate_db):
     assert data["latest_scrape_run_listings_seen"] == 1
     assert data["latest_scrape_run_listings_created"] == 0
     assert data["latest_scrape_run_listings_updated"] == 0
-    assert data["latest_successful_scrape_finished_at"] is None
+    assert data["latest_successful_scrape_finished_at"] is not None
+    assert len(data["retailer_summaries"]) == 2
+
+    retailer_a = next(summary for summary in data["retailer_summaries"] if summary["retailer"]["name"] == "TestRetailer A")
+    retailer_b = next(summary for summary in data["retailer_summaries"] if summary["retailer"]["name"] == "TestRetailer B")
+
+    assert retailer_a["status"] == "failed"
+    assert retailer_a["is_stale"] is False
+    assert retailer_a["active_offer_count"] == 2
+    assert retailer_a["latest_scrape_run_status"] == "failed"
+    assert retailer_a["latest_successful_scrape_finished_at"] is not None
+    assert retailer_a["successful_scrape_age_hours"] == 1
+
+    assert retailer_b["status"] == "never_run"
+    assert retailer_b["is_stale"] is True
+    assert retailer_b["active_offer_count"] == 2
+    assert retailer_b["latest_scrape_run_status"] is None
+    assert retailer_b["latest_successful_scrape_finished_at"] is None
+
+
+def test_v2_data_quality_reports_queue_and_catalog_hygiene(client, populate_db):
+    response = client.get("/api/v2/data-quality")
+    assert response.status_code == 200
+
+    data = response.json()
+    assert data["review_queue_count"] == 1
+    assert data["high_confidence_review_count"] == 0
+    assert data["medium_confidence_review_count"] == 0
+    assert data["low_confidence_review_count"] == 1
+    assert data["stale_offer_count"] == 1
+    assert data["stale_offer_threshold_days"] == 7
+    assert data["unpriced_active_offer_count"] == 1
+    assert data["uncategorized_listing_count"] == 1
+    assert data["products_without_active_offers_count"] == 1
+    assert data["stale_retailer_count"] == 2
+
+    retailer_a = next(row for row in data["retailer_queue"] if row["retailer"]["name"] == "TestRetailer A")
+    retailer_b = next(row for row in data["retailer_queue"] if row["retailer"]["name"] == "TestRetailer B")
+    assert retailer_a["pending_review_count"] == 1
+    assert retailer_a["high_confidence_review_count"] == 0
+    assert retailer_a["active_offer_count"] == 2
+    assert retailer_b["pending_review_count"] == 0
+    assert retailer_b["active_offer_count"] == 2
+
+    gpu_category = next(row for row in data["category_queue"] if row["category"]["name"] == "Graphics Cards")
+    cpu_category = next(row for row in data["category_queue"] if row["category"]["name"] == "CPUs")
+    assert gpu_category["pending_review_count"] == 1
+    assert gpu_category["active_offer_count"] == 2
+    assert gpu_category["canonical_product_count"] == 2
+    assert cpu_category["pending_review_count"] == 0
+    assert cpu_category["active_offer_count"] == 2
+    assert cpu_category["canonical_product_count"] == 1
+
+    issue_map = {issue["key"]: issue for issue in data["issues"]}
+    assert issue_map["review_queue"]["severity"] == "warning"
+    assert issue_map["stale_offers"]["severity"] == "critical"
+    assert issue_map["stale_retailers"]["count"] == 2
 
 
 def test_v2_health_reports_empty_catalog_as_degraded(client):
@@ -350,6 +433,7 @@ def test_v2_health_reports_empty_catalog_as_degraded(client):
     assert data["review_queue_count"] == 0
     assert data["latest_scrape_run_status"] is None
     assert data["latest_scrape_run_error_summary"] is None
+    assert data["retailer_summaries"] == []
 
 
 def test_v2_products_filter_by_category(client, populate_db):
@@ -453,6 +537,8 @@ def test_v2_match_decisions_filters_review_items(client, populate_db):
     assert decisions[0]["retailer_listing"]["retailer"]["name"] == "TestRetailer A"
     assert decisions[0]["canonical_product"] is None
     assert decisions[0]["retailer_listing"]["category"]["name"] == "Graphics Cards"
+    assert decisions[0]["top_candidate"] is not None
+    assert decisions[0]["top_candidate"]["canonical_product"]["id"] == populate_db["gpu_product_id"]
 
 
 def test_v2_match_decisions_support_category_search_and_offset(client, populate_db):
@@ -487,6 +573,51 @@ def test_v2_match_decisions_support_category_search_and_offset(client, populate_
     second_payload = second_page.json()
     assert second_payload["total"] == 1
     assert second_payload["decisions"] == []
+
+
+def test_v2_match_decisions_support_confidence_sorting(client, populate_db, session_factory):
+    session = session_factory()
+    try:
+        retailer_b = session.execute(
+            select(Retailer).where(Retailer.name == "TestRetailer B")
+        ).scalar_one()
+        extra_listing = RetailerListing(
+            retailer_id=retailer_b.id,
+            category_id=populate_db["cat_gpu_id"],
+            source_url="http://test.com/p6",
+            source_hash="p6",
+            title="RTX review candidate",
+            brand="ASUS",
+            model="RTX review candidate",
+            normalized_model="rtx review candidate",
+            loose_normalized_model="rtx review candidate",
+            status=ProductStatus.AVAILABLE,
+        )
+        session.add(extra_listing)
+        session.commit()
+
+        extra_decision = MatchDecision(
+            retailer_listing_id=extra_listing.id,
+            decision=MatchDecisionType.NEEDS_REVIEW,
+            confidence=0.87,
+            matcher="candidate_rank",
+            rationale="Second review item",
+            fingerprint="second-review-item",
+        )
+        session.add(extra_decision)
+        session.commit()
+    finally:
+        session.close()
+
+    response = client.get(
+        "/api/v2/match-decisions",
+        params={"decision": "needs_review", "sort_by": "confidence_desc"},
+    )
+    assert response.status_code == 200
+    decisions = response.json()["decisions"]
+    assert len(decisions) == 2
+    assert decisions[0]["confidence"] == 0.87
+    assert decisions[1]["id"] == populate_db["review_decision_id"]
 
 
 def test_v2_match_decision_candidates_rank_best_match_first(client, populate_db):
@@ -537,6 +668,52 @@ def test_v2_match_decision_manual_match_updates_offer_assignment(client, populat
         assert decision.decision == MatchDecisionType.MANUAL_MATCHED
     finally:
         session.close()
+
+
+def test_v2_match_decision_bulk_apply_top_candidates(client, populate_db, session_factory):
+    response = client.post(
+        "/api/v2/match-decisions/bulk-apply-top-candidates",
+        json={
+            "decision_ids": [populate_db["review_decision_id"]],
+            "min_score": 95.0,
+        },
+        headers={"X-API-Key": "change-me"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["resolved_ids"] == [populate_db["review_decision_id"]]
+    assert payload["skipped"] == []
+
+    session = session_factory()
+    try:
+        offer = session.execute(
+            select(Offer).where(Offer.retailer_listing_id == populate_db["listing_one_id"])
+        ).scalar_one()
+        decision = session.get(MatchDecision, populate_db["review_decision_id"])
+        assert offer.canonical_product_id == int(populate_db["gpu_product_id"])
+        assert decision.decision == MatchDecisionType.MANUAL_MATCHED
+    finally:
+        session.close()
+
+
+def test_v2_match_decision_bulk_apply_top_candidates_skips_below_threshold(client, populate_db, session_factory):
+    response = client.post(
+        "/api/v2/match-decisions/bulk-apply-top-candidates",
+        json={
+            "decision_ids": [populate_db["review_decision_id"]],
+            "min_score": 101.0,
+        },
+        headers={"X-API-Key": "change-me"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["resolved_ids"] == []
+    assert payload["skipped"] == [
+        {
+            "decision_id": populate_db["review_decision_id"],
+            "reason": "below_min_score",
+        }
+    ]
 
 
 def test_v2_match_decision_manual_reject_deactivates_offer(client, populate_db, session_factory):

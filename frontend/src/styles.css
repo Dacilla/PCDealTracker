@@ -299,6 +299,14 @@ button:focus-visible {
   font-family: var(--mono);
 }
 
+.panel-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .foot-stats {
   display: grid;
   gap: 10px;
@@ -530,6 +538,13 @@ button:focus-visible {
   gap: 10px;
 }
 
+.product-action-group,
+.table-action-group {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
 .product-card h3 {
   font-size: 17px;
   line-height: 1.2;
@@ -674,7 +689,7 @@ tbody tr:hover {
 }
 
 .table-end {
-  width: 52px;
+  width: 110px;
   text-align: right;
 }
 
@@ -772,6 +787,12 @@ tbody tr:hover {
   background: rgba(255, 255, 255, 0.02);
 }
 
+.panel-note {
+  margin-bottom: 10px;
+  color: var(--fg2);
+  font-size: 12px;
+}
+
 .inline-error {
   border-style: solid;
   border-color: rgba(255, 122, 102, 0.25);
@@ -819,6 +840,20 @@ tbody tr:hover {
 
 .queue-item strong {
   margin: 8px 0 4px;
+}
+
+.queue-item-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.queue-top-candidate {
+  display: block;
+  margin-top: 6px;
+  color: var(--fg2);
+  font-size: 12px;
 }
 
 .review-detail-head h3 {
@@ -872,6 +907,17 @@ tbody tr:hover {
   border-color: var(--accent);
 }
 
+.quick-match-panel {
+  padding: 12px;
+}
+
+.quick-match-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
 .candidate-metrics {
   text-align: right;
   flex-shrink: 0;
@@ -884,6 +930,12 @@ tbody tr:hover {
   border: 1px solid var(--border2);
   background: var(--bg3);
   color: var(--fg2);
+}
+
+.btn-inline {
+  height: 26px;
+  padding: 0 8px;
+  font-size: 12px;
 }
 
 .btn:hover {
@@ -947,6 +999,98 @@ tbody tr:hover {
   font-size: 11px;
 }
 
+.compare-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.retailer-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.dq-grid,
+.issue-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.compare-card {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.retailer-card {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.retailer-inline-error {
+  min-height: 0;
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.issue-panel {
+  padding: 14px;
+}
+
+.issue-card {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.issue-count {
+  font-size: 28px;
+  line-height: 1;
+}
+
+.compare-card h3 {
+  margin: 0;
+  font-size: 17px;
+  line-height: 1.25;
+}
+
+.compare-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.compare-stat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--fg2);
+  font-size: 13px;
+}
+
+.alert-form-panel {
+  padding: 14px;
+}
+
+.alert-form-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.5fr) minmax(140px, 0.7fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.alert-form-actions {
+  display: flex;
+  align-items: end;
+}
+
 .placeholder-screen {
   display: flex;
   justify-content: center;
@@ -970,6 +1114,14 @@ tbody tr:hover {
   .detail-panel,
   .review-queue-panel {
     min-height: auto;
+  }
+
+  .alert-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .quick-match-row {
+    flex-direction: column;
   }
 }
 

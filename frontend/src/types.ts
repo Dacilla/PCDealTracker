@@ -73,6 +73,65 @@ export type HealthPayload = {
   latest_scrape_run_listings_created?: number | null;
   latest_scrape_run_listings_updated?: number | null;
   latest_successful_scrape_finished_at?: string | null;
+  retailer_summaries: RetailerHealthSummary[];
+};
+
+export type DataQualityIssue = {
+  key: string;
+  label: string;
+  count: number;
+  severity: string;
+  detail: string;
+};
+
+export type DataQualityRetailerRow = {
+  retailer: Retailer;
+  pending_review_count: number;
+  high_confidence_review_count: number;
+  low_confidence_review_count: number;
+  active_offer_count: number;
+};
+
+export type DataQualityCategoryRow = {
+  category?: Category | null;
+  pending_review_count: number;
+  high_confidence_review_count: number;
+  active_offer_count: number;
+  canonical_product_count: number;
+};
+
+export type DataQualityPayload = {
+  review_queue_count: number;
+  high_confidence_review_count: number;
+  medium_confidence_review_count: number;
+  low_confidence_review_count: number;
+  stale_offer_count: number;
+  stale_offer_threshold_days: number;
+  unpriced_active_offer_count: number;
+  uncategorized_listing_count: number;
+  products_without_active_offers_count: number;
+  stale_retailer_count: number;
+  retailer_queue: DataQualityRetailerRow[];
+  category_queue: DataQualityCategoryRow[];
+  issues: DataQualityIssue[];
+};
+
+export type RetailerHealthSummary = {
+  retailer: Retailer;
+  status: string;
+  is_stale: boolean;
+  stale_after_hours: number;
+  active_offer_count: number;
+  latest_scrape_run_status?: string | null;
+  latest_scrape_run_scraper_name?: string | null;
+  latest_scrape_run_started_at?: string | null;
+  latest_scrape_run_finished_at?: string | null;
+  latest_scrape_run_error_summary?: string | null;
+  latest_scrape_run_listings_seen?: number | null;
+  latest_scrape_run_listings_created?: number | null;
+  latest_scrape_run_listings_updated?: number | null;
+  latest_successful_scrape_finished_at?: string | null;
+  successful_scrape_age_hours?: number | null;
 };
 
 export type HistorySeries = {
@@ -123,6 +182,7 @@ export type MatchDecision = {
   retailer_listing: ListingReference;
   canonical_product?: CanonicalReference | null;
   scrape_run_id?: number | null;
+  top_candidate?: MatchCandidate | null;
 };
 
 export type MatchDecisionPage = {
@@ -149,6 +209,19 @@ export type MatchDecisionResolutionPayload = {
   decision: "manual_matched" | "manual_rejected";
   canonical_product_id?: string;
   rationale?: string;
+};
+
+export type BulkTopCandidatePayload = {
+  decision_ids: number[];
+  min_score: number;
+};
+
+export type BulkTopCandidateResult = {
+  resolved_ids: number[];
+  skipped: Array<{
+    decision_id: number;
+    reason: string;
+  }>;
 };
 
 export type MatchCandidate = {

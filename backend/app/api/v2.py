@@ -142,6 +142,7 @@ class V2MatchDecisionSchema(BaseModel):
     retailer_listing: V2ListingReferenceSchema
     canonical_product: Optional[V2CanonicalReferenceSchema] = None
     scrape_run_id: Optional[int] = None
+    top_candidate: Optional["V2MatchCandidateSchema"] = None
 
 
 class V2MatchDecisionPageSchema(BaseModel):
@@ -155,6 +156,21 @@ class V2MatchDecisionResolutionRequest(BaseModel):
     rationale: Optional[str] = None
 
 
+class V2BulkTopCandidateRequest(BaseModel):
+    decision_ids: List[int]
+    min_score: float = 95.0
+
+
+class V2BulkTopCandidateSkippedSchema(BaseModel):
+    decision_id: int
+    reason: str
+
+
+class V2BulkTopCandidateResponse(BaseModel):
+    resolved_ids: List[int]
+    skipped: List[V2BulkTopCandidateSkippedSchema]
+
+
 class V2MatchCandidateSchema(BaseModel):
     canonical_product: V2CanonicalReferenceSchema
     category: V2CategorySchema
@@ -163,6 +179,24 @@ class V2MatchCandidateSchema(BaseModel):
     retailer_count: int
     score: float
     reasons: List[str]
+
+
+class V2RetailerHealthSummarySchema(BaseModel):
+    retailer: V2RetailerSchema
+    status: str
+    is_stale: bool
+    stale_after_hours: int
+    active_offer_count: int
+    latest_scrape_run_status: Optional[str] = None
+    latest_scrape_run_scraper_name: Optional[str] = None
+    latest_scrape_run_started_at: Optional[datetime.datetime] = None
+    latest_scrape_run_finished_at: Optional[datetime.datetime] = None
+    latest_scrape_run_error_summary: Optional[str] = None
+    latest_scrape_run_listings_seen: Optional[int] = None
+    latest_scrape_run_listings_created: Optional[int] = None
+    latest_scrape_run_listings_updated: Optional[int] = None
+    latest_successful_scrape_finished_at: Optional[datetime.datetime] = None
+    successful_scrape_age_hours: Optional[int] = None
 
 
 class V2HealthResponseSchema(BaseModel):
@@ -184,6 +218,47 @@ class V2HealthResponseSchema(BaseModel):
     latest_scrape_run_listings_created: Optional[int] = None
     latest_scrape_run_listings_updated: Optional[int] = None
     latest_successful_scrape_finished_at: Optional[datetime.datetime] = None
+    retailer_summaries: List[V2RetailerHealthSummarySchema] = []
+
+
+class V2DataQualityIssueSchema(BaseModel):
+    key: str
+    label: str
+    count: int
+    severity: str
+    detail: str
+
+
+class V2DataQualityRetailerSchema(BaseModel):
+    retailer: V2RetailerSchema
+    pending_review_count: int
+    high_confidence_review_count: int
+    low_confidence_review_count: int
+    active_offer_count: int
+
+
+class V2DataQualityCategorySchema(BaseModel):
+    category: Optional[V2CategorySchema] = None
+    pending_review_count: int
+    high_confidence_review_count: int
+    active_offer_count: int
+    canonical_product_count: int
+
+
+class V2DataQualityResponseSchema(BaseModel):
+    review_queue_count: int
+    high_confidence_review_count: int
+    medium_confidence_review_count: int
+    low_confidence_review_count: int
+    stale_offer_count: int
+    stale_offer_threshold_days: int
+    unpriced_active_offer_count: int
+    uncategorized_listing_count: int
+    products_without_active_offers_count: int
+    stale_retailer_count: int
+    retailer_queue: List[V2DataQualityRetailerSchema] = []
+    category_queue: List[V2DataQualityCategorySchema] = []
+    issues: List[V2DataQualityIssueSchema] = []
 
 
 router = APIRouter(prefix="/api/v2", tags=["V2"])
@@ -269,6 +344,120 @@ def _scrape_run_schema(scrape_run: ScrapeRun) -> V2ScrapeRunSchema:
     )
 
 
+def _scrape_health_status(
+    *,
+    latest_run_status: Optional[ScrapeRunStatus],
+    latest_successful_at: Optional[datetime.datetime],
+    now: datetime.datetime,
+    stale_after_hours: int,
+) -> tuple[str, bool, Optional[int]]:
+    successful_scrape_age_hours: Optional[int] = None
+    if latest_successful_at is not None:
+        successful_scrape_age_hours = max(
+            0,
+            int((now - latest_successful_at).total_seconds() // 3600),
+        )
+
+    is_stale = successful_scrape_age_hours is None or successful_scrape_age_hours > stale_after_hours
+
+    if latest_run_status == ScrapeRunStatus.STARTED:
+        return "running", False, successful_scrape_age_hours
+    if latest_run_status == ScrapeRunStatus.FAILED:
+        return "failed", is_stale, successful_scrape_age_hours
+    if latest_run_status == ScrapeRunStatus.PARTIAL:
+        return "stale" if is_stale else "partial", is_stale, successful_scrape_age_hours
+    if latest_run_status is None:
+        return "never_run", True, successful_scrape_age_hours
+    if is_stale:
+        return "stale", True, successful_scrape_age_hours
+    return "ok", False, successful_scrape_age_hours
+
+
+def _retailer_health_summary_schema(
+    *,
+    retailer: Retailer,
+    active_offer_count: int,
+    latest_run: Optional[ScrapeRun],
+    latest_successful_at: Optional[datetime.datetime],
+    now: datetime.datetime,
+    stale_after_hours: int,
+) -> V2RetailerHealthSummarySchema:
+    latest_run_status = latest_run.status if latest_run is not None else None
+    status, is_stale, successful_scrape_age_hours = _scrape_health_status(
+        latest_run_status=latest_run_status,
+        latest_successful_at=latest_successful_at,
+        now=now,
+        stale_after_hours=stale_after_hours,
+    )
+    return V2RetailerHealthSummarySchema(
+        retailer=_retailer_schema(retailer),
+        status=status,
+        is_stale=is_stale,
+        stale_after_hours=stale_after_hours,
+        active_offer_count=active_offer_count,
+        latest_scrape_run_status=latest_run_status.value if latest_run_status is not None else None,
+        latest_scrape_run_scraper_name=latest_run.scraper_name if latest_run is not None else None,
+        latest_scrape_run_started_at=latest_run.started_at if latest_run is not None else None,
+        latest_scrape_run_finished_at=latest_run.finished_at if latest_run is not None else None,
+        latest_scrape_run_error_summary=latest_run.error_summary if latest_run is not None else None,
+        latest_scrape_run_listings_seen=latest_run.listings_seen if latest_run is not None else None,
+        latest_scrape_run_listings_created=latest_run.listings_created if latest_run is not None else None,
+        latest_scrape_run_listings_updated=latest_run.listings_updated if latest_run is not None else None,
+        latest_successful_scrape_finished_at=latest_successful_at,
+        successful_scrape_age_hours=successful_scrape_age_hours,
+    )
+
+
+def _build_retailer_health_summaries(
+    db: Session,
+    *,
+    now: datetime.datetime,
+    stale_after_hours: int,
+) -> List[V2RetailerHealthSummarySchema]:
+    retailers = db.execute(select(Retailer).order_by(Retailer.name.asc())).scalars().all()
+    active_offer_rows = db.execute(
+        select(Offer.retailer_id, func.count())
+        .where(
+            Offer.is_active.is_(True),
+            Offer.status == ProductStatus.AVAILABLE,
+        )
+        .group_by(Offer.retailer_id)
+    ).all()
+    active_offer_count_by_retailer = {retailer_id: count for retailer_id, count in active_offer_rows}
+    latest_successful_rows = db.execute(
+        select(ScrapeRun.retailer_id, func.max(func.coalesce(ScrapeRun.finished_at, ScrapeRun.started_at)))
+        .where(
+            ScrapeRun.retailer_id.is_not(None),
+            ScrapeRun.status == ScrapeRunStatus.SUCCEEDED,
+        )
+        .group_by(ScrapeRun.retailer_id)
+    ).all()
+    latest_successful_by_retailer = {retailer_id: finished_at for retailer_id, finished_at in latest_successful_rows}
+    scrape_runs = db.execute(
+        select(ScrapeRun)
+        .where(ScrapeRun.retailer_id.is_not(None))
+        .options(joinedload(ScrapeRun.retailer))
+        .order_by(ScrapeRun.started_at.desc(), ScrapeRun.id.desc())
+    ).scalars().all()
+    latest_run_by_retailer: Dict[int, ScrapeRun] = {}
+    for scrape_run in scrape_runs:
+        if scrape_run.retailer_id is None or scrape_run.retailer_id in latest_run_by_retailer:
+            continue
+        latest_run_by_retailer[scrape_run.retailer_id] = scrape_run
+
+    return [
+        _retailer_health_summary_schema(
+            retailer=retailer,
+            active_offer_count=active_offer_count_by_retailer.get(retailer.id, 0),
+            latest_run=latest_run_by_retailer.get(retailer.id),
+            latest_successful_at=latest_successful_by_retailer.get(retailer.id),
+            now=now,
+            stale_after_hours=stale_after_hours,
+        )
+        for retailer in retailers
+    ]
+
+
 def _listing_reference_schema(listing: RetailerListing) -> V2ListingReferenceSchema:
     return V2ListingReferenceSchema(
         id=listing.id,
@@ -280,7 +469,11 @@ def _listing_reference_schema(listing: RetailerListing) -> V2ListingReferenceSch
     )
 
 
-def _match_decision_schema(match_decision: MatchDecision) -> V2MatchDecisionSchema:
+def _match_decision_schema(
+    match_decision: MatchDecision,
+    *,
+    top_candidate=None,
+) -> V2MatchDecisionSchema:
     return V2MatchDecisionSchema(
         id=match_decision.id,
         decision=match_decision.decision.value,
@@ -296,6 +489,7 @@ def _match_decision_schema(match_decision: MatchDecision) -> V2MatchDecisionSche
             else None
         ),
         scrape_run_id=match_decision.scrape_run_id,
+        top_candidate=_match_candidate_schema(top_candidate) if top_candidate is not None else None,
     )
 
 
@@ -491,6 +685,8 @@ def _get_match_decision_or_404(db: Session, decision_id: int) -> MatchDecision:
 
 @router.get("/health", response_model=V2HealthResponseSchema)
 def get_health(db: Session = Depends(get_db)):
+    stale_after_hours = 36
+    now = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
     retailer_count = db.execute(select(func.count()).select_from(Retailer)).scalar_one()
     category_count = db.execute(select(func.count()).select_from(Category)).scalar_one()
     canonical_product_count = db.execute(
@@ -517,6 +713,11 @@ def get_health(db: Session = Depends(get_db)):
     latest_successful_scrape_finished_at = db.execute(
         select(func.max(ScrapeRun.finished_at)).where(ScrapeRun.status == ScrapeRunStatus.SUCCEEDED)
     ).scalar_one()
+    retailer_summaries = _build_retailer_health_summaries(
+        db,
+        now=now,
+        stale_after_hours=stale_after_hours,
+    )
 
     catalog_ready = canonical_product_count > 0 and active_offer_count > 0
     latest_status = latest_scrape_run.status.value if latest_scrape_run is not None else None
@@ -543,6 +744,324 @@ def get_health(db: Session = Depends(get_db)):
         latest_scrape_run_listings_created=latest_scrape_run.listings_created if latest_scrape_run is not None else None,
         latest_scrape_run_listings_updated=latest_scrape_run.listings_updated if latest_scrape_run is not None else None,
         latest_successful_scrape_finished_at=latest_successful_scrape_finished_at,
+        retailer_summaries=retailer_summaries,
+    )
+
+
+@router.get("/data-quality", response_model=V2DataQualityResponseSchema)
+def get_data_quality(db: Session = Depends(get_db)):
+    _require_persisted_catalog(db)
+
+    stale_offer_threshold_days = 7
+    stale_retailer_threshold_hours = 36
+    now = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
+    stale_offer_cutoff = now - datetime.timedelta(days=stale_offer_threshold_days)
+    high_confidence_threshold = 0.9
+    medium_confidence_threshold = 0.6
+
+    review_queue_count = db.execute(
+        select(func.count()).select_from(MatchDecision).where(MatchDecision.decision == MatchDecisionType.NEEDS_REVIEW)
+    ).scalar_one()
+    high_confidence_review_count = db.execute(
+        select(func.count())
+        .select_from(MatchDecision)
+        .where(
+            MatchDecision.decision == MatchDecisionType.NEEDS_REVIEW,
+            MatchDecision.confidence.is_not(None),
+            MatchDecision.confidence >= high_confidence_threshold,
+        )
+    ).scalar_one()
+    medium_confidence_review_count = db.execute(
+        select(func.count())
+        .select_from(MatchDecision)
+        .where(
+            MatchDecision.decision == MatchDecisionType.NEEDS_REVIEW,
+            MatchDecision.confidence.is_not(None),
+            MatchDecision.confidence >= medium_confidence_threshold,
+            MatchDecision.confidence < high_confidence_threshold,
+        )
+    ).scalar_one()
+    low_confidence_review_count = review_queue_count - high_confidence_review_count - medium_confidence_review_count
+
+    stale_offer_count = db.execute(
+        select(func.count())
+        .select_from(Offer)
+        .where(
+            Offer.is_active.is_(True),
+            Offer.status == ProductStatus.AVAILABLE,
+            Offer.last_seen_at < stale_offer_cutoff,
+        )
+    ).scalar_one()
+    unpriced_active_offer_count = db.execute(
+        select(func.count())
+        .select_from(Offer)
+        .where(
+            Offer.is_active.is_(True),
+            Offer.status == ProductStatus.AVAILABLE,
+            Offer.current_price.is_(None),
+        )
+    ).scalar_one()
+    uncategorized_listing_count = db.execute(
+        select(func.count())
+        .select_from(RetailerListing)
+        .where(
+            RetailerListing.status == ProductStatus.AVAILABLE,
+            RetailerListing.category_id.is_(None),
+        )
+    ).scalar_one()
+
+    active_offer_presence = (
+        select(
+            Offer.canonical_product_id.label("canonical_product_id"),
+            func.sum(
+                case(
+                    (
+                        and_(
+                            Offer.is_active.is_(True),
+                            Offer.status == ProductStatus.AVAILABLE,
+                        ),
+                        1,
+                    ),
+                    else_=0,
+                )
+            ).label("active_offer_count"),
+        )
+        .group_by(Offer.canonical_product_id)
+        .subquery()
+    )
+    products_without_active_offers_count = db.execute(
+        select(func.count())
+        .select_from(CanonicalProduct)
+        .outerjoin(
+            active_offer_presence,
+            active_offer_presence.c.canonical_product_id == CanonicalProduct.id,
+        )
+        .where(
+            CanonicalProduct.is_active.is_(True),
+            func.coalesce(active_offer_presence.c.active_offer_count, 0) == 0,
+        )
+    ).scalar_one()
+
+    retailer_rows = db.execute(
+        select(
+            Retailer.id,
+            func.count(MatchDecision.id),
+            func.sum(
+                case(
+                    (
+                        and_(
+                            MatchDecision.confidence.is_not(None),
+                            MatchDecision.confidence >= high_confidence_threshold,
+                        ),
+                        1,
+                    ),
+                    else_=0,
+                )
+            ),
+            func.sum(
+                case(
+                    (
+                        or_(
+                            MatchDecision.confidence.is_(None),
+                            MatchDecision.confidence < medium_confidence_threshold,
+                        ),
+                        1,
+                    ),
+                    else_=0,
+                )
+            ),
+        )
+        .select_from(Retailer)
+        .join(Retailer.v2_listings)
+        .join(RetailerListing.match_decisions)
+        .where(MatchDecision.decision == MatchDecisionType.NEEDS_REVIEW)
+        .group_by(Retailer.id)
+    ).all()
+    retailer_counts = {
+        retailer_id: {
+            "pending_review_count": pending_review_count,
+            "high_confidence_review_count": high_confidence_review_count,
+            "low_confidence_review_count": low_confidence_review_count,
+        }
+        for retailer_id, pending_review_count, high_confidence_review_count, low_confidence_review_count in retailer_rows
+    }
+    active_offer_rows = db.execute(
+        select(Offer.retailer_id, func.count())
+        .where(
+            Offer.is_active.is_(True),
+            Offer.status == ProductStatus.AVAILABLE,
+        )
+        .group_by(Offer.retailer_id)
+    ).all()
+    active_offer_count_by_retailer = {retailer_id: count for retailer_id, count in active_offer_rows}
+    retailers = db.execute(select(Retailer).order_by(Retailer.name.asc())).scalars().all()
+    retailer_queue = [
+        V2DataQualityRetailerSchema(
+            retailer=_retailer_schema(retailer),
+            pending_review_count=retailer_counts.get(retailer.id, {}).get("pending_review_count", 0),
+            high_confidence_review_count=retailer_counts.get(retailer.id, {}).get("high_confidence_review_count", 0),
+            low_confidence_review_count=retailer_counts.get(retailer.id, {}).get("low_confidence_review_count", 0),
+            active_offer_count=active_offer_count_by_retailer.get(retailer.id, 0),
+        )
+        for retailer in retailers
+        if retailer.id in retailer_counts or active_offer_count_by_retailer.get(retailer.id, 0) > 0
+    ]
+    retailer_queue.sort(
+        key=lambda item: (
+            -item.pending_review_count,
+            -item.high_confidence_review_count,
+            item.retailer.name.lower(),
+        )
+    )
+
+    category_rows = db.execute(
+        select(
+            Category.id,
+            func.count(MatchDecision.id),
+            func.sum(
+                case(
+                    (
+                        and_(
+                            MatchDecision.confidence.is_not(None),
+                            MatchDecision.confidence >= high_confidence_threshold,
+                        ),
+                        1,
+                    ),
+                    else_=0,
+                )
+            ),
+        )
+        .select_from(Category)
+        .join(Category.retailer_listings)
+        .join(RetailerListing.match_decisions)
+        .where(MatchDecision.decision == MatchDecisionType.NEEDS_REVIEW)
+        .group_by(Category.id)
+    ).all()
+    category_queue_counts = {
+        category_id: {
+            "pending_review_count": pending_review_count,
+            "high_confidence_review_count": high_confidence_review_count,
+        }
+        for category_id, pending_review_count, high_confidence_review_count in category_rows
+    }
+    active_offer_rows = db.execute(
+        select(Offer.category_id, func.count())
+        .where(
+            Offer.is_active.is_(True),
+            Offer.status == ProductStatus.AVAILABLE,
+            Offer.category_id.is_not(None),
+        )
+        .group_by(Offer.category_id)
+    ).all()
+    active_offer_count_by_category = {category_id: count for category_id, count in active_offer_rows}
+    canonical_product_rows = db.execute(
+        select(CanonicalProduct.category_id, func.count())
+        .where(CanonicalProduct.is_active.is_(True))
+        .group_by(CanonicalProduct.category_id)
+    ).all()
+    canonical_product_count_by_category = {category_id: count for category_id, count in canonical_product_rows}
+    categories = db.execute(select(Category).order_by(Category.name.asc())).scalars().all()
+    category_queue = [
+        V2DataQualityCategorySchema(
+            category=_category_schema(category),
+            pending_review_count=category_queue_counts.get(category.id, {}).get("pending_review_count", 0),
+            high_confidence_review_count=category_queue_counts.get(category.id, {}).get("high_confidence_review_count", 0),
+            active_offer_count=active_offer_count_by_category.get(category.id, 0),
+            canonical_product_count=canonical_product_count_by_category.get(category.id, 0),
+        )
+        for category in categories
+        if (
+            category.id in category_queue_counts
+            or active_offer_count_by_category.get(category.id, 0) > 0
+            or canonical_product_count_by_category.get(category.id, 0) > 0
+        )
+    ]
+    category_queue.sort(
+        key=lambda item: (
+            -item.pending_review_count,
+            -item.high_confidence_review_count,
+            item.category.name.lower() if item.category is not None else "",
+        )
+    )
+
+    retailer_summaries = _build_retailer_health_summaries(
+        db,
+        now=now,
+        stale_after_hours=stale_retailer_threshold_hours,
+    )
+    stale_retailer_count = sum(1 for summary in retailer_summaries if summary.status in {"failed", "stale", "never_run"})
+
+    def issue_severity(count: int, *, critical: bool = False) -> str:
+        if count <= 0:
+            return "ok"
+        return "critical" if critical else "warning"
+
+    issues = [
+        V2DataQualityIssueSchema(
+            key="review_queue",
+            label="Pending review queue",
+            count=review_queue_count,
+            severity=issue_severity(review_queue_count),
+            detail="Ambiguous retailer listings still waiting for a match or rejection.",
+        ),
+        V2DataQualityIssueSchema(
+            key="high_confidence_review_queue",
+            label="High-confidence review items",
+            count=high_confidence_review_count,
+            severity=issue_severity(high_confidence_review_count),
+            detail="Queue items with matcher confidence of at least 90% that are good candidates for bulk resolution.",
+        ),
+        V2DataQualityIssueSchema(
+            key="stale_offers",
+            label="Stale active offers",
+            count=stale_offer_count,
+            severity=issue_severity(stale_offer_count, critical=True),
+            detail=f"Active offers that have not been seen for at least {stale_offer_threshold_days} days.",
+        ),
+        V2DataQualityIssueSchema(
+            key="unpriced_active_offers",
+            label="Unpriced active offers",
+            count=unpriced_active_offer_count,
+            severity=issue_severity(unpriced_active_offer_count),
+            detail="Available offers missing a current price, which weakens comparisons and best-price signals.",
+        ),
+        V2DataQualityIssueSchema(
+            key="uncategorized_listings",
+            label="Uncategorised listings",
+            count=uncategorized_listing_count,
+            severity=issue_severity(uncategorized_listing_count),
+            detail="Retailer listings still missing a category assignment.",
+        ),
+        V2DataQualityIssueSchema(
+            key="products_without_active_offers",
+            label="Canonical products without live offers",
+            count=products_without_active_offers_count,
+            severity=issue_severity(products_without_active_offers_count),
+            detail="Active canonical products that no longer have any live available offers attached.",
+        ),
+        V2DataQualityIssueSchema(
+            key="stale_retailers",
+            label="Retailers needing scrape attention",
+            count=stale_retailer_count,
+            severity=issue_severity(stale_retailer_count, critical=True),
+            detail="Retailers whose latest state is failed, stale, or never run.",
+        ),
+    ]
+
+    return V2DataQualityResponseSchema(
+        review_queue_count=review_queue_count,
+        high_confidence_review_count=high_confidence_review_count,
+        medium_confidence_review_count=medium_confidence_review_count,
+        low_confidence_review_count=low_confidence_review_count,
+        stale_offer_count=stale_offer_count,
+        stale_offer_threshold_days=stale_offer_threshold_days,
+        unpriced_active_offer_count=unpriced_active_offer_count,
+        uncategorized_listing_count=uncategorized_listing_count,
+        products_without_active_offers_count=products_without_active_offers_count,
+        stale_retailer_count=stale_retailer_count,
+        retailer_queue=retailer_queue,
+        category_queue=category_queue,
+        issues=issues,
     )
 
 
@@ -799,6 +1318,7 @@ def list_match_decisions(
     retailer_id: Optional[int] = Query(None),
     category_id: Optional[int] = Query(None),
     search: Optional[str] = Query(None),
+    sort_by: str = Query("created_desc"),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ):
@@ -809,8 +1329,15 @@ def list_match_decisions(
             joinedload(MatchDecision.retailer_listing).joinedload(RetailerListing.category),
             joinedload(MatchDecision.canonical_product),
         )
-        .order_by(MatchDecision.created_at.desc(), MatchDecision.id.desc())
     )
+    if sort_by == "confidence_desc":
+        query = query.order_by(
+            MatchDecision.confidence.desc().nullslast(),
+            MatchDecision.created_at.desc(),
+            MatchDecision.id.desc(),
+        )
+    else:
+        query = query.order_by(MatchDecision.created_at.desc(), MatchDecision.id.desc())
     filters = []
     if decision is not None:
         filters.append(MatchDecision.decision == decision)
@@ -834,9 +1361,25 @@ def list_match_decisions(
 
     decisions = db.execute(query.offset(offset).limit(limit)).scalars().all()
     total = db.execute(total_query).scalar_one()
+    top_candidates_by_decision: Dict[int, object | None] = {}
+    if decision == MatchDecisionType.NEEDS_REVIEW:
+        for match_decision in decisions:
+            ranked_candidates = rank_match_candidates(
+                db,
+                listing=match_decision.retailer_listing,
+                search=None,
+                limit=1,
+            )
+            top_candidates_by_decision[match_decision.id] = ranked_candidates[0] if ranked_candidates else None
     return V2MatchDecisionPageSchema(
         total=total,
-        decisions=[_match_decision_schema(item) for item in decisions],
+        decisions=[
+            _match_decision_schema(
+                item,
+                top_candidate=top_candidates_by_decision.get(item.id),
+            )
+            for item in decisions
+        ],
     )
 
 
@@ -902,3 +1445,51 @@ def patch_match_decision(
     db.commit()
     refreshed = _get_match_decision_or_404(db, decision_id)
     return _match_decision_schema(refreshed)
+
+
+@router.post("/match-decisions/bulk-apply-top-candidates", response_model=V2BulkTopCandidateResponse)
+def bulk_apply_top_candidates(
+    payload: V2BulkTopCandidateRequest,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_review_api_key),
+):
+    resolved_ids: List[int] = []
+    skipped: List[V2BulkTopCandidateSkippedSchema] = []
+
+    for decision_id in payload.decision_ids:
+        match_decision = _get_match_decision_or_404(db, decision_id)
+        if match_decision.decision != MatchDecisionType.NEEDS_REVIEW:
+            skipped.append(V2BulkTopCandidateSkippedSchema(decision_id=decision_id, reason="decision_not_pending_review"))
+            continue
+
+        ranked_candidates = rank_match_candidates(
+            db,
+            listing=match_decision.retailer_listing,
+            search=None,
+            limit=1,
+        )
+        if not ranked_candidates:
+            skipped.append(V2BulkTopCandidateSkippedSchema(decision_id=decision_id, reason="no_candidate"))
+            continue
+
+        top_candidate = ranked_candidates[0]
+        if top_candidate.score < payload.min_score:
+            skipped.append(V2BulkTopCandidateSkippedSchema(decision_id=decision_id, reason="below_min_score"))
+            continue
+
+        try:
+            resolve_match_decision(
+                db,
+                match_decision=match_decision,
+                decision=MatchDecisionType.MANUAL_MATCHED,
+                canonical_product=top_candidate.canonical_product,
+                rationale=f"Bulk accepted top candidate {top_candidate.canonical_product.canonical_name}",
+            )
+        except ValueError as exc:
+            skipped.append(V2BulkTopCandidateSkippedSchema(decision_id=decision_id, reason=str(exc)))
+            continue
+
+        resolved_ids.append(decision_id)
+
+    db.commit()
+    return V2BulkTopCandidateResponse(resolved_ids=resolved_ids, skipped=skipped)
