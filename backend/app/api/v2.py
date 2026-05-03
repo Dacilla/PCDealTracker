@@ -3,7 +3,7 @@ from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import and_, case, func, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from ..database import (
@@ -14,6 +14,7 @@ from ..database import (
     Offer,
     PriceObservation,
     ProductStatus,
+    Retailer,
     RetailerListing,
     ScrapeRun,
     ScrapeRunStatus,
@@ -143,6 +144,11 @@ class V2MatchDecisionSchema(BaseModel):
     scrape_run_id: Optional[int] = None
 
 
+class V2MatchDecisionPageSchema(BaseModel):
+    total: int
+    decisions: List[V2MatchDecisionSchema]
+
+
 class V2MatchDecisionResolutionRequest(BaseModel):
     decision: MatchDecisionType
     canonical_product_id: Optional[str] = None
@@ -157,6 +163,27 @@ class V2MatchCandidateSchema(BaseModel):
     retailer_count: int
     score: float
     reasons: List[str]
+
+
+class V2HealthResponseSchema(BaseModel):
+    status: str
+    database_ok: bool
+    catalog_ready: bool
+    retailer_count: int
+    category_count: int
+    canonical_product_count: int
+    active_offer_count: int
+    review_queue_count: int
+    latest_scrape_run_status: Optional[str] = None
+    latest_scrape_run_scraper_name: Optional[str] = None
+    latest_scrape_run_retailer_name: Optional[str] = None
+    latest_scrape_run_started_at: Optional[datetime.datetime] = None
+    latest_scrape_run_finished_at: Optional[datetime.datetime] = None
+    latest_scrape_run_error_summary: Optional[str] = None
+    latest_scrape_run_listings_seen: Optional[int] = None
+    latest_scrape_run_listings_created: Optional[int] = None
+    latest_scrape_run_listings_updated: Optional[int] = None
+    latest_successful_scrape_finished_at: Optional[datetime.datetime] = None
 
 
 router = APIRouter(prefix="/api/v2", tags=["V2"])
@@ -462,6 +489,63 @@ def _get_match_decision_or_404(db: Session, decision_id: int) -> MatchDecision:
     return match_decision
 
 
+@router.get("/health", response_model=V2HealthResponseSchema)
+def get_health(db: Session = Depends(get_db)):
+    retailer_count = db.execute(select(func.count()).select_from(Retailer)).scalar_one()
+    category_count = db.execute(select(func.count()).select_from(Category)).scalar_one()
+    canonical_product_count = db.execute(
+        select(func.count()).select_from(CanonicalProduct).where(CanonicalProduct.is_active.is_(True))
+    ).scalar_one()
+    active_offer_count = db.execute(
+        select(func.count())
+        .select_from(Offer)
+        .where(
+            Offer.is_active.is_(True),
+            Offer.status == ProductStatus.AVAILABLE,
+        )
+    ).scalar_one()
+    review_queue_count = db.execute(
+        select(func.count()).select_from(MatchDecision).where(MatchDecision.decision == MatchDecisionType.NEEDS_REVIEW)
+    ).scalar_one()
+
+    latest_scrape_run = db.execute(
+        select(ScrapeRun)
+        .options(joinedload(ScrapeRun.retailer))
+        .order_by(ScrapeRun.started_at.desc(), ScrapeRun.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    latest_successful_scrape_finished_at = db.execute(
+        select(func.max(ScrapeRun.finished_at)).where(ScrapeRun.status == ScrapeRunStatus.SUCCEEDED)
+    ).scalar_one()
+
+    catalog_ready = canonical_product_count > 0 and active_offer_count > 0
+    latest_status = latest_scrape_run.status.value if latest_scrape_run is not None else None
+    status = "ok"
+    if not catalog_ready or latest_status == ScrapeRunStatus.FAILED.value:
+        status = "degraded"
+
+    return V2HealthResponseSchema(
+        status=status,
+        database_ok=True,
+        catalog_ready=catalog_ready,
+        retailer_count=retailer_count,
+        category_count=category_count,
+        canonical_product_count=canonical_product_count,
+        active_offer_count=active_offer_count,
+        review_queue_count=review_queue_count,
+        latest_scrape_run_status=latest_status,
+        latest_scrape_run_scraper_name=latest_scrape_run.scraper_name if latest_scrape_run is not None else None,
+        latest_scrape_run_retailer_name=latest_scrape_run.retailer.name if latest_scrape_run and latest_scrape_run.retailer else None,
+        latest_scrape_run_started_at=latest_scrape_run.started_at if latest_scrape_run is not None else None,
+        latest_scrape_run_finished_at=latest_scrape_run.finished_at if latest_scrape_run is not None else None,
+        latest_scrape_run_error_summary=latest_scrape_run.error_summary if latest_scrape_run is not None else None,
+        latest_scrape_run_listings_seen=latest_scrape_run.listings_seen if latest_scrape_run is not None else None,
+        latest_scrape_run_listings_created=latest_scrape_run.listings_created if latest_scrape_run is not None else None,
+        latest_scrape_run_listings_updated=latest_scrape_run.listings_updated if latest_scrape_run is not None else None,
+        latest_successful_scrape_finished_at=latest_successful_scrape_finished_at,
+    )
+
+
 @router.get("/products", response_model=V2ProductPageSchema)
 def list_products(
     db: Session = Depends(get_db),
@@ -708,12 +792,15 @@ def list_scrape_runs(
     return [_scrape_run_schema(run) for run in runs]
 
 
-@router.get("/match-decisions", response_model=List[V2MatchDecisionSchema])
+@router.get("/match-decisions", response_model=V2MatchDecisionPageSchema)
 def list_match_decisions(
     db: Session = Depends(get_db),
     decision: Optional[MatchDecisionType] = Query(None),
     retailer_id: Optional[int] = Query(None),
+    category_id: Optional[int] = Query(None),
+    search: Optional[str] = Query(None),
     limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ):
     query = (
         select(MatchDecision)
@@ -723,18 +810,34 @@ def list_match_decisions(
             joinedload(MatchDecision.canonical_product),
         )
         .order_by(MatchDecision.created_at.desc(), MatchDecision.id.desc())
-        .limit(limit)
     )
     filters = []
     if decision is not None:
         filters.append(MatchDecision.decision == decision)
     if retailer_id is not None:
         filters.append(MatchDecision.retailer_listing.has(RetailerListing.retailer_id == retailer_id))
+    if category_id is not None:
+        filters.append(MatchDecision.retailer_listing.has(RetailerListing.category_id == category_id))
+    if search:
+        search_pattern = f"%{search.strip()}%"
+        filters.append(
+            or_(
+                MatchDecision.fingerprint.ilike(search_pattern),
+                MatchDecision.retailer_listing.has(RetailerListing.title.ilike(search_pattern)),
+            )
+        )
     if filters:
         query = query.where(and_(*filters))
+        total_query = select(func.count()).select_from(MatchDecision).where(and_(*filters))
+    else:
+        total_query = select(func.count()).select_from(MatchDecision)
 
-    decisions = db.execute(query).scalars().all()
-    return [_match_decision_schema(item) for item in decisions]
+    decisions = db.execute(query.offset(offset).limit(limit)).scalars().all()
+    total = db.execute(total_query).scalar_one()
+    return V2MatchDecisionPageSchema(
+        total=total,
+        decisions=[_match_decision_schema(item) for item in decisions],
+    )
 
 
 @router.get("/match-decisions/{decision_id}/candidates", response_model=List[V2MatchCandidateSchema])

@@ -1,7 +1,9 @@
 import datetime
 
+from fastapi.testclient import TestClient
+
 from backend.app.config import settings
-from backend.app.main import build_scrape_scheduler
+from backend.app.main import app, build_scrape_scheduler
 
 
 def test_build_scrape_scheduler_returns_none_when_disabled(monkeypatch):
@@ -21,3 +23,18 @@ def test_build_scrape_scheduler_uses_configured_interval(monkeypatch):
     assert len(jobs) == 1
     assert jobs[0].id == "native_v2_scrape"
     assert jobs[0].trigger.interval == datetime.timedelta(hours=4)
+
+
+def test_cors_allows_vite_preview_origin():
+    client = TestClient(app)
+
+    response = client.options(
+        "/",
+        headers={
+            "Origin": "http://127.0.0.1:4173",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:4173"

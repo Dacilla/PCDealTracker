@@ -1,8 +1,10 @@
 import type {
   FilterPayload,
+  HealthPayload,
   HistoryPayload,
   MatchCandidate,
   MatchDecision,
+  MatchDecisionPage,
   MatchDecisionResolutionPayload,
   ProductDetail,
   ProductPage,
@@ -80,6 +82,10 @@ export function fetchFilters(categoryId?: number) {
   return fetchJson<FilterPayload>("/filters", { category_id: categoryId });
 }
 
+export function fetchHealth() {
+  return fetchJson<HealthPayload>("/health");
+}
+
 export function fetchHistory(productId: string) {
   return fetchJson<HistoryPayload>("/history", { product_id: productId });
 }
@@ -93,7 +99,7 @@ export function fetchScrapeRuns(params?: Record<string, string | number | boolea
 }
 
 export function fetchMatchDecisions(params?: Record<string, string | number | boolean | undefined>) {
-  return fetchJson<MatchDecision[]>("/match-decisions", params);
+  return fetchJson<MatchDecisionPage>("/match-decisions", params);
 }
 
 export function fetchMatchCandidates(decisionId: number, params?: Record<string, string | number | boolean | undefined>) {

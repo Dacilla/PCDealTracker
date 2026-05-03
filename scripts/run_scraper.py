@@ -32,9 +32,27 @@ NATIVE_V2_SCRAPERS = [
     run_pccg_v2_scraper,
 ]
 
+SCRAPER_BY_RETAILER = {
+    "centrecom": run_centrecom_v2_scraper,
+    "computeralliance": run_computeralliance_v2_scraper,
+    "jw": run_jw_v2_scraper,
+    "msy": run_msy_v2_scraper,
+    "pccg": run_pccg_v2_scraper,
+    "scorptec": run_scorptec_v2_scraper,
+    "shoppingexpress": run_shoppingexpress_v2_scraper,
+    "umart": run_umart_v2_scraper,
+}
+
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    return argparse.ArgumentParser(description="Run the native v2 PCDealTracker scrapers.")
+    parser = argparse.ArgumentParser(description="Run the native v2 PCDealTracker scrapers.")
+    parser.add_argument(
+        "--retailer",
+        action="append",
+        choices=sorted(SCRAPER_BY_RETAILER),
+        help="Run only the selected retailer scraper. Repeat the flag to run multiple retailers.",
+    )
+    return parser
 
 
 def run_scraper_batch(shutdown_event: threading.Event, scraper_funcs, *, batch_label: str) -> None:
@@ -66,14 +84,19 @@ def run_scraper_batch(shutdown_event: threading.Event, scraper_funcs, *, batch_l
                 print(f"\n--- {scraper_name} Generated an Exception: {exc} ---")
 
 
-def run_native_v2_pipeline(shutdown_event: threading.Event | None = None) -> None:
+def run_native_v2_pipeline(
+    shutdown_event: threading.Event | None = None,
+    *,
+    scraper_funcs=None,
+) -> None:
     active_shutdown_event = shutdown_event or threading.Event()
+    selected_scrapers = scraper_funcs or NATIVE_V2_SCRAPERS
 
     try:
         print("--- Initializing Database ---")
         setup_database()
         print("--- Database Initialization Complete ---")
-        run_scraper_batch(active_shutdown_event, NATIVE_V2_SCRAPERS, batch_label="Native V2 Scrapers")
+        run_scraper_batch(active_shutdown_event, selected_scrapers, batch_label="Native V2 Scrapers")
     except KeyboardInterrupt:
         print("\n\nKeyboard interrupt received. Signaling scrapers to shut down...")
         active_shutdown_event.set()
@@ -86,11 +109,14 @@ def run_native_v2_pipeline(shutdown_event: threading.Event | None = None) -> Non
 
 def main(argv=None):
     parser = build_arg_parser()
-    parser.parse_args(argv)
+    args = parser.parse_args(argv)
 
     shutdown_event = threading.Event()
+    scraper_funcs = NATIVE_V2_SCRAPERS
+    if args.retailer:
+        scraper_funcs = [SCRAPER_BY_RETAILER[retailer] for retailer in args.retailer]
 
-    run_native_v2_pipeline(shutdown_event)
+    run_native_v2_pipeline(shutdown_event, scraper_funcs=scraper_funcs)
 
 
 if __name__ == "__main__":

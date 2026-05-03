@@ -14,3 +14,4 @@ redis
 thefuzz
 python-Levenshtein
 pytest
+playwright

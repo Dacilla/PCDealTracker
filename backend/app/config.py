@@ -19,6 +19,12 @@ class Settings(BaseSettings):
     scrape_scheduler_enabled: bool = False
     max_concurrent_scrapers: int = 10
     request_delay_seconds: int = 2
+    scraper_headless: bool = False
+    scraper_user_data_dir: str | None = None
+    scraper_browser_executable: str | None = None
+    scraper_browser_major_version: int | None = None
+    scraper_page_timeout_seconds: int = 15
+    scraper_challenge_timeout_seconds: int = 45
 
     # API settings
     api_host: str = "0.0.0.0"
@@ -28,6 +34,8 @@ class Settings(BaseSettings):
         default_factory=lambda: [
             "http://localhost:5173",
             "http://127.0.0.1:5173",
+            "http://localhost:4173",
+            "http://127.0.0.1:4173",
             "http://localhost:8080",
             "http://127.0.0.1:8080",
         ]

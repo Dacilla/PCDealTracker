@@ -312,6 +312,46 @@ def test_v2_products_list_basic(client, populate_db):
     assert sorted(gpu_product["retailers"]) == ["TestRetailer A", "TestRetailer B"]
 
 
+def test_v2_health_reports_catalog_and_scrape_state(client, populate_db):
+    response = client.get("/api/v2/health")
+    assert response.status_code == 200
+
+    data = response.json()
+    assert data["status"] == "degraded"
+    assert data["database_ok"] is True
+    assert data["catalog_ready"] is True
+    assert data["retailer_count"] == 2
+    assert data["category_count"] == 2
+    assert data["canonical_product_count"] == 3
+    assert data["active_offer_count"] == 3
+    assert data["review_queue_count"] == 1
+    assert data["latest_scrape_run_status"] == "failed"
+    assert data["latest_scrape_run_scraper_name"] == "manual_review_probe"
+    assert data["latest_scrape_run_retailer_name"] == "TestRetailer A"
+    assert data["latest_scrape_run_started_at"] is not None
+    assert data["latest_scrape_run_finished_at"] is None
+    assert data["latest_scrape_run_error_summary"] == "Simulated scrape failure"
+    assert data["latest_scrape_run_listings_seen"] == 1
+    assert data["latest_scrape_run_listings_created"] == 0
+    assert data["latest_scrape_run_listings_updated"] == 0
+    assert data["latest_successful_scrape_finished_at"] is None
+
+
+def test_v2_health_reports_empty_catalog_as_degraded(client):
+    response = client.get("/api/v2/health")
+    assert response.status_code == 200
+
+    data = response.json()
+    assert data["status"] == "degraded"
+    assert data["database_ok"] is True
+    assert data["catalog_ready"] is False
+    assert data["canonical_product_count"] == 0
+    assert data["active_offer_count"] == 0
+    assert data["review_queue_count"] == 0
+    assert data["latest_scrape_run_status"] is None
+    assert data["latest_scrape_run_error_summary"] is None
+
+
 def test_v2_products_filter_by_category(client, populate_db):
     gpu_id = populate_db["cat_gpu_id"]
     response = client.get("/api/v2/products", params={"category_id": gpu_id})
@@ -405,12 +445,48 @@ def test_v2_match_decisions_filters_review_items(client, populate_db):
         params={"decision": "needs_review", "retailer_id": populate_db["retailer_one_id"]},
     )
     assert response.status_code == 200
-    decisions = response.json()
+    payload = response.json()
+    decisions = payload["decisions"]
+    assert payload["total"] == 1
     assert len(decisions) == 1
     assert decisions[0]["decision"] == "needs_review"
     assert decisions[0]["retailer_listing"]["retailer"]["name"] == "TestRetailer A"
     assert decisions[0]["canonical_product"] is None
     assert decisions[0]["retailer_listing"]["category"]["name"] == "Graphics Cards"
+
+
+def test_v2_match_decisions_support_category_search_and_offset(client, populate_db):
+    response = client.get(
+        "/api/v2/match-decisions",
+        params={
+            "decision": "needs_review",
+            "category_id": populate_db["cat_gpu_id"],
+            "search": "fingerprint-review",
+            "limit": 1,
+            "offset": 0,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    assert len(payload["decisions"]) == 1
+    assert payload["decisions"][0]["id"] == populate_db["review_decision_id"]
+
+    second_page = client.get(
+        "/api/v2/match-decisions",
+        params={
+            "decision": "needs_review",
+            "category_id": populate_db["cat_gpu_id"],
+            "search": "fingerprint-review",
+            "limit": 1,
+            "offset": 1,
+        },
+    )
+    assert second_page.status_code == 200
+    second_payload = second_page.json()
+    assert second_payload["total"] == 1
+    assert second_payload["decisions"] == []
 
 
 def test_v2_match_decision_candidates_rank_best_match_first(client, populate_db):

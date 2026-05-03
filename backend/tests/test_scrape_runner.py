@@ -1,11 +1,18 @@
-from scripts.run_scraper import NATIVE_V2_SCRAPERS, build_arg_parser
+from scripts.run_scraper import NATIVE_V2_SCRAPERS, SCRAPER_BY_RETAILER, build_arg_parser
 
 
 def test_scrape_runner_parser_accepts_default_invocation():
     parser = build_arg_parser()
     args = parser.parse_args([])
 
-    assert vars(args) == {}
+    assert vars(args) == {"retailer": None}
+
+
+def test_scrape_runner_parser_accepts_specific_retailers():
+    parser = build_arg_parser()
+    args = parser.parse_args(["--retailer", "centrecom", "--retailer", "scorptec"])
+
+    assert args.retailer == ["centrecom", "scorptec"]
 
 
 def test_scrape_runner_batch_matches_current_native_retailer_set():
@@ -19,4 +26,14 @@ def test_scrape_runner_batch_matches_current_native_retailer_set():
         "run_umart_v2_scraper",
         "run_msy_v2_scraper",
         "run_pccg_v2_scraper",
+    }
+    assert set(SCRAPER_BY_RETAILER) == {
+        "centrecom",
+        "computeralliance",
+        "jw",
+        "msy",
+        "pccg",
+        "scorptec",
+        "shoppingexpress",
+        "umart",
     }

@@ -20,6 +20,7 @@ from backend.app.database import (
     ScrapeRunStatus,
 )
 from backend.app.services.v2_catalog import clear_v2_catalog
+from scripts.init_database import setup_database
 
 
 def test_v2_schema_relationships_roundtrip(tmp_path):
@@ -234,6 +235,40 @@ def test_clear_v2_catalog_removes_catalog_rows_only(tmp_path):
         assert session.execute(select(MatchDecision)).scalars().all() == []
         assert session.execute(select(Retailer)).scalars().all()
         assert session.execute(select(Category)).scalars().all()
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_setup_database_bootstraps_empty_sqlite_with_migrations_and_seed_data(tmp_path):
+    database_path = tmp_path / "bootstrap.sqlite3"
+    database_url = f"sqlite:///{database_path}"
+
+    setup_database(database_url)
+
+    engine = create_engine(database_url, connect_args={"check_same_thread": False})
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    assert "alembic_version" in tables
+    assert "retailers" in tables
+    assert "categories" in tables
+    assert "canonical_products" in tables
+    assert "retailer_listings" in tables
+    assert "offers" in tables
+    assert "price_observations" in tables
+    assert "scrape_runs" in tables
+    assert "match_decisions" in tables
+
+    SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    session = SessionLocal()
+    try:
+        retailers = session.execute(select(Retailer).order_by(Retailer.name.asc())).scalars().all()
+        categories = session.execute(select(Category).order_by(Category.name.asc())).scalars().all()
+
+        assert len(retailers) == 8
+        assert len(categories) == 10
+        centre_com = next(retailer for retailer in retailers if retailer.name == "Centre Com")
+        assert centre_com.logo_url is None
     finally:
         session.close()
         engine.dispose()

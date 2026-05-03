@@ -1,31 +1,60 @@
 import os
 import sys
+from pathlib import Path
+
+from alembic import command
+from alembic.config import Config
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 # Add the project root to the Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from backend.app.database import Base, Retailer, Category
+from backend.app.database import Base, Category, Retailer
 from backend.app.config import settings
 
-engine = create_engine(settings.database_url)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-def setup_database():
-    """
-    Creates all database tables and populates the initial data for retailers and categories.
-    """
-    # Create tables
-    Base.metadata.create_all(bind=engine)
+def build_engine(database_url: str | None = None):
+    resolved_database_url = database_url or settings.database_url
+    engine_kwargs = {}
+    if resolved_database_url.startswith("sqlite"):
+        engine_kwargs["connect_args"] = {"check_same_thread": False}
+    return create_engine(resolved_database_url, **engine_kwargs)
 
+
+def build_session_factory(database_url: str | None = None):
+    engine = build_engine(database_url)
+    return sessionmaker(autocommit=False, autoflush=False, bind=engine), engine
+
+
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def ensure_reference_tables(database_url: str | None = None) -> None:
+    engine = build_engine(database_url)
+    try:
+        Base.metadata.create_all(bind=engine, tables=[Retailer.__table__, Category.__table__])
+    finally:
+        engine.dispose()
+
+
+def run_migrations(database_url: str | None = None) -> None:
+    resolved_database_url = database_url or settings.database_url
+    alembic_cfg = Config(str(_project_root() / "alembic.ini"))
+    alembic_cfg.set_main_option("sqlalchemy.url", resolved_database_url)
+    command.upgrade(alembic_cfg, "head")
+
+
+def seed_reference_data(database_url: str | None = None) -> None:
+    SessionLocal, engine = build_session_factory(database_url)
     db = SessionLocal()
     try:
         # --- Populate Retailers with local logo paths ---
         retailers = [
             {"name": "PC Case Gear", "url": "https://www.pccasegear.com", "logo_url": "assets/logos/pccg.png"},
             {"name": "Scorptec", "url": "https://www.scorptec.com.au", "logo_url": "assets/logos/scorptec.png"},
-            {"name": "Centre Com", "url": "https://www.centrecom.com.au", "logo_url": "assets/logos/centrecom.png"},
+            {"name": "Centre Com", "url": "https://www.centrecom.com.au", "logo_url": None},
             {"name": "MSY Technology", "url": "https://www.msy.com.au", "logo_url": "assets/logos/msy.png"},
             {"name": "Umart", "url": "https://www.umart.com.au", "logo_url": "assets/logos/umart.png"},
             {"name": "Computer Alliance", "url": "https://www.computeralliance.com.au", "logo_url": "assets/logos/computeralliance.png"},
@@ -55,6 +84,16 @@ def setup_database():
         db.commit()
     finally:
         db.close()
+        engine.dispose()
+
+
+def setup_database(database_url: str | None = None):
+    """
+    Bootstraps reference tables, applies Alembic migrations, and seeds retailers/categories.
+    """
+    ensure_reference_tables(database_url)
+    run_migrations(database_url)
+    seed_reference_data(database_url)
 
 if __name__ == "__main__":
     print("Setting up the database...")

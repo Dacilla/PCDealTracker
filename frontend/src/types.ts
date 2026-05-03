@@ -54,6 +54,27 @@ export type FilterPayload = {
   max_price?: number | null;
 };
 
+export type HealthPayload = {
+  status: string;
+  database_ok: boolean;
+  catalog_ready: boolean;
+  retailer_count: number;
+  category_count: number;
+  canonical_product_count: number;
+  active_offer_count: number;
+  review_queue_count: number;
+  latest_scrape_run_status?: string | null;
+  latest_scrape_run_scraper_name?: string | null;
+  latest_scrape_run_retailer_name?: string | null;
+  latest_scrape_run_started_at?: string | null;
+  latest_scrape_run_finished_at?: string | null;
+  latest_scrape_run_error_summary?: string | null;
+  latest_scrape_run_listings_seen?: number | null;
+  latest_scrape_run_listings_created?: number | null;
+  latest_scrape_run_listings_updated?: number | null;
+  latest_successful_scrape_finished_at?: string | null;
+};
+
 export type HistorySeries = {
   retailer: Retailer;
   points: Array<{
@@ -102,6 +123,11 @@ export type MatchDecision = {
   retailer_listing: ListingReference;
   canonical_product?: CanonicalReference | null;
   scrape_run_id?: number | null;
+};
+
+export type MatchDecisionPage = {
+  total: number;
+  decisions: MatchDecision[];
 };
 
 export type ScrapeRun = {
