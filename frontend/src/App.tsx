@@ -1,15 +1,5 @@
-import { startTransition, useDeferredValue, useEffect, useMemo, useState } from "react";
+import { lazy, startTransition, Suspense, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  CartesianGrid,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis
-} from "recharts";
-
 import {
   bulkApplyTopCandidates,
   fetchDataQuality,
@@ -75,6 +65,50 @@ const WATCHLIST_STORAGE_KEY = "pcdt-watchlist";
 const COMPARE_STORAGE_KEY = "pcdt-compare";
 const ALERTS_STORAGE_KEY = "pcdt-alerts";
 const SERIES_COLORS = ["#58d4ff", "#4ec89a", "#f5b745", "#ff7a66", "#b988ff", "#8cd6ff"];
+
+const LazyChart = lazy(() =>
+  import("recharts").then((mod) => ({
+    default: ({
+      chartRows,
+      history
+    }: {
+      chartRows: Record<string, string | number>[];
+      history?: HistoryPayload;
+    }) => (
+      <mod.ResponsiveContainer width="100%" height={220}>
+        <mod.LineChart data={chartRows}>
+          <mod.CartesianGrid stroke="rgba(111, 125, 148, 0.16)" vertical={false} />
+          <mod.XAxis dataKey="date" tick={{ fill: "#93a1b5", fontSize: 11 }} axisLine={false} tickLine={false} />
+          <mod.YAxis
+            tick={{ fill: "#93a1b5", fontSize: 11 }}
+            axisLine={false}
+            tickLine={false}
+            tickFormatter={(value: number) => `$${value}`}
+          />
+          <mod.Tooltip
+            contentStyle={{
+              background: "#171c24",
+              border: "1px solid rgba(111, 125, 148, 0.22)",
+              color: "#ecf2ff",
+              borderRadius: 6,
+              fontSize: 12
+            }}
+          />
+          {history?.series.map((series, index) => (
+            <mod.Line
+              key={series.retailer.id}
+              type="monotone"
+              dataKey={series.retailer.name}
+              stroke={SERIES_COLORS[index % SERIES_COLORS.length]}
+              strokeWidth={2}
+              dot={false}
+            />
+          ))}
+        </mod.LineChart>
+      </mod.ResponsiveContainer>
+    )
+  }))
+);
 
 const NAV_SECTIONS: Array<{ title: string; items: Screen[] }> = [
   { title: "Shop", items: ["catalog", "deals", "watchlist", "alerts", "compare"] },
@@ -144,19 +178,23 @@ const SCREEN_META: Record<Screen, { title: string; subtitle: string; implemented
   }
 };
 
+const currencyFormatter = new Intl.NumberFormat("en-AU", {
+  style: "currency",
+  currency: "AUD",
+  maximumFractionDigits: 0
+});
+
+const numberFormatter = new Intl.NumberFormat("en-AU");
+
 function formatCurrency(value?: number | null) {
   if (value === undefined || value === null) {
     return "—";
   }
-  return new Intl.NumberFormat("en-AU", {
-    style: "currency",
-    currency: "AUD",
-    maximumFractionDigits: 0
-  }).format(value);
+  return currencyFormatter.format(value);
 }
 
 function formatNumber(value?: number | null) {
-  return new Intl.NumberFormat("en-AU").format(value ?? 0);
+  return numberFormatter.format(value ?? 0);
 }
 
 function formatTimestamp(value?: string | null) {
@@ -464,7 +502,18 @@ function ProductCard({
   onToggleCompare: (productId: string) => void;
 }) {
   return (
-    <article className={`product-card ${active ? "active" : ""}`} onClick={() => onSelect(product.id)}>
+    <article
+      className={`product-card ${active ? "active" : ""}`}
+      tabIndex={0}
+      role="button"
+      onClick={() => onSelect(product.id)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onSelect(product.id);
+        }
+      }}
+    >
       <div className="product-card-top">
         <span className="tag tag-muted">{product.category.name}</span>
         <div className="product-action-group">
@@ -664,37 +713,9 @@ function ProductDetailPanel({
         {chartRows.length === 0 ? (
           <div className="panel-empty">No recorded history for this product yet.</div>
         ) : (
-          <ResponsiveContainer width="100%" height={220}>
-            <LineChart data={chartRows}>
-              <CartesianGrid stroke="rgba(111, 125, 148, 0.16)" vertical={false} />
-              <XAxis dataKey="date" tick={{ fill: "#93a1b5", fontSize: 11 }} axisLine={false} tickLine={false} />
-              <YAxis
-                tick={{ fill: "#93a1b5", fontSize: 11 }}
-                axisLine={false}
-                tickLine={false}
-                tickFormatter={(value) => `$${value}`}
-              />
-              <Tooltip
-                contentStyle={{
-                  background: "#171c24",
-                  border: "1px solid rgba(111, 125, 148, 0.22)",
-                  color: "#ecf2ff",
-                  borderRadius: 6,
-                  fontSize: 12
-                }}
-              />
-              {history?.series.map((series, index) => (
-                <Line
-                  key={series.retailer.id}
-                  type="monotone"
-                  dataKey={series.retailer.name}
-                  stroke={SERIES_COLORS[index % SERIES_COLORS.length]}
-                  strokeWidth={2}
-                  dot={false}
-                />
-              ))}
-            </LineChart>
-          </ResponsiveContainer>
+          <Suspense fallback={<div className="panel-empty">Loading chart…</div>}>
+            <LazyChart chartRows={chartRows} history={history} />
+          </Suspense>
         )}
       </div>
 
@@ -830,7 +851,7 @@ function ReviewDetail({
           <span>Candidate matches</span>
           <span className="mono">{candidatesQuery.data?.length ?? 0}</span>
         </div>
-        {candidatesQuery.isLoading ? <div className="panel-empty">Loading candidate products...</div> : null}
+        {candidatesQuery.isLoading ? <div className="panel-empty">Loading candidate products…</div> : null}
         {!candidatesQuery.isLoading && (candidatesQuery.data?.length ?? 0) === 0 ? (
           <div className="panel-empty">No candidate products matched the current search.</div>
         ) : null}
@@ -908,7 +929,7 @@ function CompareScreen({
   if (products.length === 0) {
     return (
       <section className="workspace">
-        <div className="panel-empty">Loading product data for the compare workspace...</div>
+        <div className="panel-empty">Loading product data for the compare workspace…</div>
       </section>
     );
   }
@@ -1021,12 +1042,13 @@ function AlertsScreen({
   const [targetPriceInput, setTargetPriceInput] = useState("");
   const productMap = useMemo(() => new Map(products.map((product) => [product.id, product])), [products]);
   const watchlistProducts = products.filter((product) => watchlistIds.includes(product.id));
-  const alertRows = alerts
-    .map((alert) => {
-      const product = productMap.get(alert.productId);
-      return product ? { alert, product } : null;
-    })
-    .filter((row): row is { alert: LocalPriceAlert; product: ProductSummary } => Boolean(row));
+  const alertRows: { alert: LocalPriceAlert; product: ProductSummary }[] = [];
+  for (const alert of alerts) {
+    const product = productMap.get(alert.productId);
+    if (product) {
+      alertRows.push({ alert, product });
+    }
+  }
   const triggeredCount = alertRows.filter(({ alert, product }) => (product.best_price ?? Number.POSITIVE_INFINITY) <= alert.targetPrice).length;
   const activeCount = alertRows.length - triggeredCount;
 
@@ -1219,7 +1241,7 @@ function DataQualityScreen({
   onOpenRetailers: () => void;
 }) {
   if (loading && !dataQuality) {
-    return <div className="panel-empty">Loading data quality metrics...</div>;
+    return <div className="panel-empty">Loading data quality metrics…</div>;
   }
 
   if (!dataQuality) {
@@ -1411,7 +1433,7 @@ function ProductsScreen({
             <span>Canonical coverage</span>
             <span className="mono">{formatNumber(products.length)}</span>
           </div>
-          {loading ? <div className="panel-empty">Loading canonical products...</div> : null}
+          {loading ? <div className="panel-empty">Loading canonical products…</div> : null}
           {!loading && products.length === 0 ? (
             <div className="panel-empty">No canonical products matched the current admin filters.</div>
           ) : null}
@@ -1679,9 +1701,12 @@ export default function App() {
   const selectedDecision = reviewQueue.find((decision) => decision.id === selectedReviewId);
   const pendingDecisionId = resolveDecisionMutation.isPending ? resolveDecisionMutation.variables?.decisionId : undefined;
   const reviewQueueTotal = reviewQueuePage?.total ?? health?.review_queue_count ?? reviewQueue.length;
-  const bulkEligibleDecisionIds = reviewQueue
-    .filter((decision) => (decision.top_candidate?.score ?? 0) >= 95)
-    .map((decision) => decision.id);
+  const bulkEligibleDecisionIds: number[] = [];
+  for (const decision of reviewQueue) {
+    if ((decision.top_candidate?.score ?? 0) >= 95) {
+      bulkEligibleDecisionIds.push(decision.id);
+    }
+  }
 
   useEffect(() => {
     if (reviewQueue.length === 0) {
@@ -1815,7 +1840,7 @@ export default function App() {
               className="search-input"
               value={searchInput}
               onChange={(event) => setSearchInput(event.target.value)}
-              placeholder="Search products, models, fingerprints..."
+              placeholder="Search products, models, fingerprints…"
             />
           </label>
           <select
@@ -1874,7 +1899,7 @@ export default function App() {
               className="search-input"
               value={reviewSearchInput}
               onChange={(event) => handleReviewSearchChange(event.target.value)}
-              placeholder="Search listing title or fingerprint..."
+              placeholder="Search listing title or fingerprint…"
             />
           </label>
           <select
@@ -1912,6 +1937,16 @@ export default function App() {
     return null;
   }
 
+  const topbarControls = useMemo(
+    () => renderTopbarControls(),
+    [screen, searchInput, selectedCategoryId, catalogMode, productCoverageFilter, reviewSearchInput, reviewCategoryId, reviewSortBy, reviewQueueOffset, hasNextReviewPage, filtersQuery.data]
+  );
+
+  const content = useMemo(
+    () => renderContent(),
+    [screen, screenMeta, productsQuery.isLoading, productsQuery.data, visibleProducts, catalogMode, selectedProductId, watchlistIds, compareIds, selectedDetail, historyQuery.data, detailQuery.isLoading, historyQuery.isLoading, visibleTrends, filteredWatchlist, allProducts, alerts, filteredAdminProducts, productsAdminQuery.isLoading, reviewQueueQuery.isLoading, reviewQueue, reviewQueueOffset, reviewQueueTotal, bulkEligibleDecisionIds, selectedReviewId, selectedDecision, pendingDecisionId, bulkTopCandidateMutation.isPending, bulkTopCandidateMutation.data, bulkTopCandidateMutation.error, resolveDecisionMutation.error, dataQuality, dataQualityQuery.isLoading, retailerSummaries, health, scrapeRuns]
+  );
+
   function renderContent() {
     if (!screenMeta.implemented) {
       return <PlaceholderScreen screen={screen} />;
@@ -1925,7 +1960,7 @@ export default function App() {
               <span className="section-title">Canonical catalog</span>
               <span className="section-count">{formatNumber(productsQuery.data?.total)} total products</span>
             </div>
-            {productsQuery.isLoading ? <div className="panel-empty">Loading products...</div> : null}
+            {productsQuery.isLoading ? <div className="panel-empty">Loading products…</div> : null}
             {!productsQuery.isLoading && visibleProducts.length === 0 ? (
               <div className="panel-empty">No products matched the current search and category filters.</div>
             ) : null}
@@ -2120,7 +2155,7 @@ export default function App() {
               </div>
             ) : null}
             <div className="queue-list">
-              {reviewQueueQuery.isLoading ? <div className="panel-empty">Loading review queue...</div> : null}
+              {reviewQueueQuery.isLoading ? <div className="panel-empty">Loading review queue…</div> : null}
               {!reviewQueueQuery.isLoading && reviewQueue.length === 0 ? (
                 <div className="panel-empty">No review items matched the current queue filters.</div>
               ) : null}
@@ -2373,10 +2408,10 @@ export default function App() {
             <div className="topbar-title">{screenMeta.title}</div>
             <div className="topbar-sub">{screenMeta.subtitle}</div>
           </div>
-          <div className="topbar-actions">{renderTopbarControls()}</div>
+          <div className="topbar-actions">{topbarControls}</div>
         </header>
 
-        <div className="content">{renderContent()}</div>
+        <div className="content">{content}</div>
       </main>
     </div>
   );
