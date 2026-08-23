@@ -379,3 +379,56 @@ def parse_product_name(name: str) -> dict:
         parsed_data["model"] = model_str
 
     return parsed_data
+
+
+_CSS_BACKGROUND_URL_PATTERN = re.compile(r"url\((?:&quot;|[\"'])?(.*?)(?:&quot;|[\"'])?\)", re.IGNORECASE)
+
+
+def extract_listing_image_url(
+    item,
+    *,
+    selector: "str | None" = None,
+    attribute: str = "src",
+    fallback_attribute: "str | None" = None,
+    resolve_against: "str | None" = None,
+    allow_style_background: bool = True,
+):
+    """
+    Shared product-image extraction for the v2 retailer scrapers.
+
+    Retailers expose their listing images in three recurring ways:
+      - plain <img> attributes such as `src` (most retailers) or `content` (MSY, Umart)
+      - lazy-loaded attributes like `data-src` (Scorptec)
+      - inline CSS background-image styles (Centre Com)
+
+    This helper centralises those rules so new scrapers stop duplicating them.
+    Relative URLs are resolved against `resolve_against` when provided.
+    Returns None when no image can be found.
+    """
+    from urllib.parse import urljoin
+
+    if item is None:
+        return None
+
+    target = item.select_one(selector) if selector else item
+    if target is None:
+        return None
+
+    raw_url = target.get(attribute)
+    if not raw_url and fallback_attribute:
+        raw_url = target.get(fallback_attribute)
+    if not raw_url and allow_style_background:
+        style_attr = target.get("style")
+        if isinstance(style_attr, str):
+            match = _CSS_BACKGROUND_URL_PATTERN.search(style_attr)
+            raw_url = match.group(1) if match else None
+
+    if not raw_url:
+        return None
+
+    cleaned = str(raw_url).strip()
+    if not cleaned:
+        return None
+    if resolve_against:
+        return urljoin(resolve_against, cleaned)
+    return cleaned

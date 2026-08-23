@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from .base_scraper import BaseScraper
 from ..database import Category, ProductStatus, Retailer, ScrapeRunStatus
+from ..utils.parsing import extract_listing_image_url
 from ..services.v2_catalog import (
     V2ListingSnapshot,
     finish_scrape_run,
@@ -74,7 +75,6 @@ def parse_pccg_listing(
 ) -> V2ListingSnapshot | None:
     name_element = item.select_one(name_selector)
     price_element = item.select_one(price_selector)
-    image_element = item.select_one(image_selector)
     if not name_element or not price_element:
         return None
 
@@ -84,7 +84,7 @@ def parse_pccg_listing(
 
     product_name = name_element.get_text(strip=True)
     product_url = urljoin(base_url, product_url_suffix)
-    image_url = image_element.get("src") if image_element else None
+    image_url = extract_listing_image_url(item, selector=image_selector)
 
     price_text = price_element.get_text(strip=True)
     price_str = price_text.replace("$", "").replace(",", "").strip()

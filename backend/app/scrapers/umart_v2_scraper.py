@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from .base_scraper import BaseScraper
 from ..database import Category, ProductStatus, Retailer, ScrapeRunStatus
+from ..utils.parsing import extract_listing_image_url
 from ..services.v2_catalog import (
     V2ListingSnapshot,
     finish_scrape_run,
@@ -54,7 +55,6 @@ def get_umart_next_page_url(soup, base_url: str, current_url: str) -> str | None
 def parse_umart_listing(item: Tag, base_url: str) -> V2ListingSnapshot | None:
     name_element = item.select_one(".goods_name a")
     price_element = item.select_one(".goods-price")
-    image_element = item.select_one(".goods_img img")
 
     if not name_element or not price_element:
         return None
@@ -65,7 +65,7 @@ def parse_umart_listing(item: Tag, base_url: str) -> V2ListingSnapshot | None:
 
     product_name = name_element.get("title", "").strip() or name_element.get_text(strip=True)
     product_url = urljoin(base_url, href)
-    image_url = image_element.get("content") if image_element else None
+    image_url = extract_listing_image_url(item, selector=".goods_img img", attribute="content")
 
     price_text = price_element.get_text(strip=True)
     price_str = price_text.replace("$", "").replace(",", "").strip()

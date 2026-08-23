@@ -15,6 +15,7 @@ from ..services.v2_catalog import (
     start_scrape_run,
     upsert_v2_listing_snapshot,
 )
+from ..utils.parsing import extract_listing_image_url
 
 
 SCRAPE_TASKS = [
@@ -44,7 +45,6 @@ def parse_computeralliance_listing(item: Tag, base_url: str) -> V2ListingSnapsho
 
     name_element = link_element.select_one("h2.equalize")
     price_element = link_element.select_one(".price")
-    image_element = link_element.select_one(".img-container img")
     if not name_element or not price_element:
         return None
 
@@ -54,7 +54,7 @@ def parse_computeralliance_listing(item: Tag, base_url: str) -> V2ListingSnapsho
         return None
 
     product_url = urljoin(base_url, href)
-    image_url = urljoin(base_url, image_element.get("src")) if image_element and image_element.get("src") else None
+    image_url = extract_listing_image_url(link_element, selector=".img-container img", resolve_against=base_url)
 
     price_text = price_element.get_text(strip=True)
     price_str = price_text.replace("$", "").replace(",", "").strip()

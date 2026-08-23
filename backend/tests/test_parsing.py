@@ -156,3 +156,77 @@ def test_parse_attributes_monitor():
     assert attrs["resolution"] == "1440p"
     assert attrs["panel_type"] == "OLED"
     assert attrs["refresh_rate_hz"] == 240
+
+
+# --- Tests for extract_listing_image_url ---
+
+from bs4 import BeautifulSoup
+
+from backend.app.utils.parsing import extract_listing_image_url
+
+
+def _soup(html: str):
+    return BeautifulSoup(html, "html.parser")
+
+
+def test_extract_image_from_src_attribute():
+    item = _soup('<div><img src="https://cdn.example.com/gpu.jpg"></div>')
+    assert (
+        extract_listing_image_url(item, selector="img")
+        == "https://cdn.example.com/gpu.jpg"
+    )
+
+
+def test_extract_image_from_content_attribute():
+    html = '<div class="goods_img"><img content="https://cdn.msy.example/5090.png"></div>'
+    soup = _soup(html)
+    assert (
+        extract_listing_image_url(soup, selector=".goods_img img", attribute="content")
+        == "https://cdn.msy.example/5090.png"
+    )
+
+
+def test_extract_image_prefers_primary_over_fallback():
+    html = '<div><img data-src="https://cdn.example.com/lazy.webp" src="https://cdn.example.com/eager.jpg"></div>'
+    soup = _soup(html)
+    assert (
+        extract_listing_image_url(soup, selector="img", attribute="data-src", fallback_attribute="src")
+        == "https://cdn.example.com/lazy.webp"
+    )
+
+
+def test_extract_image_falls_back_to_data_src_when_src_missing():
+    html = '<div><img data-src="https://cdn.example.com/lazy.webp"></div>'
+    soup = _soup(html)
+    assert (
+        extract_listing_image_url(soup, selector="img", attribute="src", fallback_attribute="data-src")
+        == "https://cdn.example.com/lazy.webp"
+    )
+
+
+def test_extract_image_resolves_relative_urls_against_base():
+    html = '<div><img src="/images/product.webp"></div>'
+    soup = _soup(html)
+    assert (
+        extract_listing_image_url(soup, selector="img", resolve_against="https://www.scorptec.com.au")
+        == "https://www.scorptec.com.au/images/product.webp"
+    )
+
+
+def test_extract_image_from_css_background_style():
+    style = 'background-image:url(&quot;https://centrecom.example/img/5070.jpg&quot;) center no-repeat'
+    box = _soup(f'<div class="product-box" style="{style}"><span>ASUS RTX 5070</span></div>').select_one(
+        ".product-box"
+    )
+    assert extract_listing_image_url(box) == "https://centrecom.example/img/5070.jpg"
+
+
+def test_extract_image_returns_none_without_any_image_source():
+    item = _soup("<div><span>No images here</span></div>")
+    assert extract_listing_image_url(item) is None
+    assert extract_listing_image_url(None) is None
+
+
+def test_extract_image_returns_none_for_blank_attribute():
+    item = _soup('<div><img src="   "></div>')
+    assert extract_listing_image_url(item, selector="img") is None

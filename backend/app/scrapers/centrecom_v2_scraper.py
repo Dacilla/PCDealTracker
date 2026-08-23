@@ -1,5 +1,4 @@
 from urllib.parse import urljoin
-import re
 import threading
 import time
 
@@ -16,6 +15,7 @@ from ..services.v2_catalog import (
     start_scrape_run,
     upsert_v2_listing_snapshot,
 )
+from ..utils.parsing import extract_listing_image_url
 
 
 SCRAPE_TASKS = [
@@ -58,12 +58,7 @@ def parse_centrecom_listing(item: Tag, base_url: str) -> V2ListingSnapshot | Non
     product_name = name_element.get_text(strip=True)
     product_url = urljoin(base_url, product_href)
 
-    image_url = None
-    style_attr = item.get("style")
-    if style_attr:
-        match = re.search(r'url\((?:&quot;|")?(.*?)(?:&quot;|")?\)', style_attr)
-        if match:
-            image_url = match.group(1)
+    image_url = extract_listing_image_url(item)
 
     price_text = price_element.get_text(strip=True)
     price_str = price_text.replace("$", "").replace(",", "").strip()

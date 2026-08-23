@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from .base_scraper import BaseScraper
 from ..database import Category, ProductStatus, Retailer, ScrapeRunStatus
+from ..utils.parsing import extract_listing_image_url
 from ..services.v2_catalog import (
     V2ListingSnapshot,
     finish_scrape_run,
@@ -51,7 +52,6 @@ def get_shoppingexpress_next_page_url(soup, base_url: str, current_url: str) -> 
 def parse_shoppingexpress_listing(item: Tag, base_url: str) -> V2ListingSnapshot | None:
     link_element = item.select_one(".caption a")
     price_element = item.select_one("p.price span")
-    image_element = item.select_one(".thumbnail-image img")
 
     if not link_element or not price_element:
         return None
@@ -62,7 +62,7 @@ def parse_shoppingexpress_listing(item: Tag, base_url: str) -> V2ListingSnapshot
 
     product_name = link_element.get("title", link_element.get_text(strip=True))
     product_url = urljoin(base_url, href)
-    image_url = urljoin(base_url, image_element.get("src")) if image_element and image_element.get("src") else None
+    image_url = extract_listing_image_url(item, selector=".thumbnail-image img", resolve_against=base_url)
 
     price_text = price_element.get_text(strip=True)
     price_str = price_text.replace("$", "").replace(",", "").strip()

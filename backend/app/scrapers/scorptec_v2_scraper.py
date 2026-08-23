@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from .base_scraper import BaseScraper
 from ..database import Category, ProductStatus, Retailer, ScrapeRunStatus
+from ..utils.parsing import extract_listing_image_url
 from ..services.v2_catalog import (
     V2ListingSnapshot,
     finish_scrape_run,
@@ -42,7 +43,6 @@ SUBCATEGORY_DB_MAP = {
 def parse_scorptec_listing(item: Tag, base_url: str) -> V2ListingSnapshot | None:
     name_element = item.select_one(".detail-product-title a")
     price_element = item.select_one(".detail-product-price")
-    image_element = item.select_one(".detail-image-wrapper img")
     if not name_element or not price_element:
         return None
 
@@ -53,10 +53,13 @@ def parse_scorptec_listing(item: Tag, base_url: str) -> V2ListingSnapshot | None
     product_name = name_element.get_text(strip=True)
     product_url = urljoin(base_url, href)
 
-    image_src = None
-    if image_element:
-        image_src = image_element.get("data-src") or image_element.get("src")
-    image_url = urljoin(base_url, image_src) if image_src else None
+    image_url = extract_listing_image_url(
+        item,
+        selector=".detail-image-wrapper img",
+        attribute="data-src",
+        fallback_attribute="src",
+        resolve_against=base_url,
+    )
 
     price_text = price_element.get_text(strip=True)
     price_str = price_text.replace("$", "").replace(",", "").strip()
