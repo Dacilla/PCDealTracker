@@ -10,7 +10,7 @@ from sqlalchemy.orm import sessionmaker
 # Add the project root to the Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from backend.app.database import Base, Category, Retailer
+from backend.app.database import Base, Category, Retailer, register_sqlite_foreign_key_pragma
 from backend.app.config import settings
 
 
@@ -19,7 +19,7 @@ def build_engine(database_url: str | None = None):
     engine_kwargs = {}
     if resolved_database_url.startswith("sqlite"):
         engine_kwargs["connect_args"] = {"check_same_thread": False}
-    return create_engine(resolved_database_url, **engine_kwargs)
+    return register_sqlite_foreign_key_pragma(create_engine(resolved_database_url, **engine_kwargs))
 
 
 def build_session_factory(database_url: str | None = None):

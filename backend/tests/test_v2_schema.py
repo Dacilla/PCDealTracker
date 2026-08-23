@@ -2,7 +2,7 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine, inspect, select, text
+from sqlalchemy import create_engine, delete as sa_delete, inspect, select, text
 from sqlalchemy.orm import sessionmaker
 
 from backend.app.database import (
@@ -18,6 +18,7 @@ from backend.app.database import (
     RetailerListing,
     ScrapeRun,
     ScrapeRunStatus,
+    register_sqlite_foreign_key_pragma,
 )
 from backend.app.services.v2_catalog import clear_v2_catalog
 from scripts.init_database import setup_database
@@ -161,7 +162,9 @@ def test_alembic_upgrade_creates_v2_tables(tmp_path):
 
 def test_clear_v2_catalog_removes_catalog_rows_only(tmp_path):
     database_path = tmp_path / "clear_v2_catalog.sqlite3"
-    engine = create_engine(f"sqlite:///{database_path}", connect_args={"check_same_thread": False})
+    engine = register_sqlite_foreign_key_pragma(
+        create_engine(f"sqlite:///{database_path}", connect_args={"check_same_thread": False})
+    )
     SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
     Base.metadata.create_all(bind=engine)
 
@@ -235,6 +238,85 @@ def test_clear_v2_catalog_removes_catalog_rows_only(tmp_path):
         assert session.execute(select(MatchDecision)).scalars().all() == []
         assert session.execute(select(Retailer)).scalars().all()
         assert session.execute(select(Category)).scalars().all()
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_database_level_cascades_clear_dependents_from_root_deletes(tmp_path):
+    """Deleting root rows with raw Core deletes must cascade through the DB, not the ORM."""
+    database_path = tmp_path / "cascade.sqlite3"
+    engine = register_sqlite_foreign_key_pragma(
+        create_engine(f"sqlite:///{database_path}", connect_args={"check_same_thread": False})
+    )
+    SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    Base.metadata.create_all(bind=engine)
+
+    session = SessionLocal()
+    try:
+        retailer = Retailer(name="Retailer Three", url="https://retailer-three.example")
+        category = Category(name="Power Supplies")
+        session.add_all([retailer, category])
+        session.commit()
+
+        canonical = CanonicalProduct(
+            canonical_name="Corsair RM850x 850W",
+            category_id=category.id,
+            brand="Corsair",
+            model_key="rm850x",
+            fingerprint="psu-corsair-rm850x",
+        )
+        listing = RetailerListing(
+            retailer_id=retailer.id,
+            category_id=category.id,
+            source_url="https://retailer-three.example/rm850x",
+            title="Corsair RM850x",
+            status=ProductStatus.AVAILABLE,
+        )
+        session.add_all([canonical, listing])
+        session.commit()
+
+        scrape_run = ScrapeRun(
+            retailer_id=retailer.id,
+            status=ScrapeRunStatus.SUCCEEDED,
+            scraper_name="seed",
+        )
+        session.add(scrape_run)
+        session.commit()
+
+        offer = Offer(
+            canonical_product_id=canonical.id,
+            retailer_listing_id=listing.id,
+            retailer_id=retailer.id,
+            category_id=category.id,
+            listing_name=listing.title,
+            listing_url=listing.source_url,
+            current_price=189.0,
+            status=ProductStatus.AVAILABLE,
+        )
+        session.add(offer)
+        session.commit()
+
+        observation = PriceObservation(offer_id=offer.id, price=189.0, scrape_run_id=scrape_run.id)
+        decision = MatchDecision(
+            retailer_listing_id=listing.id,
+            canonical_product_id=canonical.id,
+            scrape_run_id=scrape_run.id,
+            decision=MatchDecisionType.AUTO_MATCHED,
+        )
+        session.add_all([observation, decision])
+        session.commit()
+
+        # Raw Core deletes bypass ORM cascades entirely; only DB-level ON DELETE
+        # CASCADE can keep the catalog consistent in this scenario.
+        session.execute(sa_delete(CanonicalProduct))
+        session.execute(sa_delete(RetailerListing))
+        session.commit()
+
+        assert session.execute(select(Offer)).scalars().all() == []
+        assert session.execute(select(PriceObservation)).scalars().all() == []
+        assert session.execute(select(MatchDecision)).scalars().all() == []
+        assert session.execute(select(Retailer)).scalars().all()
     finally:
         session.close()
         engine.dispose()

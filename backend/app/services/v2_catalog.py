@@ -130,11 +130,12 @@ def identity_to_fingerprint(identity: tuple) -> str:
 
 
 def clear_v2_catalog(db: Session) -> None:
-    db.execute(delete(PriceObservation))
-    db.execute(delete(MatchDecision))
-    db.execute(delete(Offer))
-    db.execute(delete(RetailerListing))
+    # Catalog FKs carry ON DELETE CASCADE at the database level (see migration
+    # 0002_add_catalog_cascades), so removing the two root entities also clears
+    # their offers, price observations, and match decisions. New dependent
+    # tables should declare the same cascade so this cleanup keeps working.
     db.execute(delete(CanonicalProduct))
+    db.execute(delete(RetailerListing))
     db.commit()
 
 

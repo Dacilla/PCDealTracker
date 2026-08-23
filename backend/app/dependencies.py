@@ -3,13 +3,14 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from .config import settings
+from .database import register_sqlite_foreign_key_pragma
 
 
 engine_kwargs = {}
 if settings.database_url.startswith("sqlite"):
     engine_kwargs["connect_args"] = {"check_same_thread": False}
 
-engine = create_engine(settings.database_url, **engine_kwargs)
+engine = register_sqlite_foreign_key_pragma(create_engine(settings.database_url, **engine_kwargs))
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 

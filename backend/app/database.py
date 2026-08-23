@@ -13,12 +13,31 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    event,
 )
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 def utcnow_naive() -> datetime.datetime:
     return datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
+
+
+def register_sqlite_foreign_key_pragma(engine: Engine) -> Engine:
+    """
+    SQLite only enforces foreign keys when the per-connection foreign_keys pragma is on.
+    Registering this listener is required for ON DELETE CASCADE clauses to fire on SQLite.
+    """
+    if not engine.url.get_backend_name().startswith("sqlite"):
+        return engine
+
+    @event.listens_for(engine, "connect")
+    def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+    return engine
 
 
 class ProductStatus(enum.Enum):
@@ -141,8 +160,12 @@ class Offer(Base):
     __tablename__ = "offers"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    canonical_product_id: Mapped[int] = mapped_column(ForeignKey("canonical_products.id"), nullable=False, index=True)
-    retailer_listing_id: Mapped[int] = mapped_column(ForeignKey("retailer_listings.id"), nullable=False, index=True)
+    canonical_product_id: Mapped[int] = mapped_column(
+        ForeignKey("canonical_products.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    retailer_listing_id: Mapped[int] = mapped_column(
+        ForeignKey("retailer_listings.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     retailer_id: Mapped[int] = mapped_column(ForeignKey("retailers.id"), nullable=False, index=True)
     # Denormalized from canonical_product.category_id for cheaper offer/category filtering.
     category_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"), nullable=True, index=True)
@@ -178,7 +201,9 @@ class PriceObservation(Base):
     __tablename__ = "price_observations"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    offer_id: Mapped[int] = mapped_column(ForeignKey("offers.id"), nullable=False, index=True)
+    offer_id: Mapped[int] = mapped_column(
+        ForeignKey("offers.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     observed_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utcnow_naive, index=True)
     price: Mapped[float] = mapped_column(Float, nullable=False)
     previous_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
@@ -224,9 +249,11 @@ class MatchDecision(Base):
     __tablename__ = "match_decisions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    retailer_listing_id: Mapped[int] = mapped_column(ForeignKey("retailer_listings.id"), nullable=False, index=True)
+    retailer_listing_id: Mapped[int] = mapped_column(
+        ForeignKey("retailer_listings.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     canonical_product_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("canonical_products.id"),
+        ForeignKey("canonical_products.id", ondelete="CASCADE"),
         nullable=True,
         index=True,
     )
