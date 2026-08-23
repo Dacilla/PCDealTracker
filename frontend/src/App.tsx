@@ -807,10 +807,14 @@ function ReviewDetail({
   const [resolutionNote, setResolutionNote] = useState("");
   const deferredCandidateSearch = useDeferredValue(candidateSearch.trim());
 
-  useEffect(() => {
+  // Reset per-decision form state while rendering when the inspected decision changes.
+  const [previousDecisionKey, setPreviousDecisionKey] = useState<string | null>(null);
+  const decisionKey = decision ? `${decision.id}:${decision.retailer_listing.title}` : null;
+  if (decisionKey !== previousDecisionKey) {
+    setPreviousDecisionKey(decisionKey);
     setCandidateSearch(decision?.retailer_listing.title ?? "");
     setResolutionNote("");
-  }, [decision?.id, decision?.retailer_listing.title]);
+  }
 
   const candidatesQuery = useQuery({
     queryKey: ["review-candidates", decision?.id, deferredCandidateSearch],
@@ -1926,18 +1930,22 @@ export default function App() {
     }
   });
 
-  const visibleProducts = productsQuery.data?.products ?? [];
-  const adminProducts = productsAdminQuery.data?.products ?? [];
-  const allProducts = allProductsQuery.data?.products ?? [];
+  const visibleProducts = useMemo(() => productsQuery.data?.products ?? [], [productsQuery.data]);
+  const adminProducts = useMemo(() => productsAdminQuery.data?.products ?? [], [productsAdminQuery.data]);
+  const allProducts = useMemo(() => allProductsQuery.data?.products ?? [], [allProductsQuery.data]);
   const visibleTrends = trendsQuery.data ?? [];
   const reviewQueuePage = reviewQueueQuery.data;
-  const reviewQueue = reviewQueuePage?.decisions ?? [];
+  const reviewQueue = useMemo(() => reviewQueuePage?.decisions ?? [], [reviewQueuePage]);
   const scrapeRuns = scrapeRunsQuery.data ?? [];
   const health = healthQuery.data;
   const dataQuality = dataQualityQuery.data;
   const retailerSummaries = health?.retailer_summaries ?? [];
   const selectedDetail = detailQuery.data;
-  const selectedDecision = reviewQueue.find((decision) => decision.id === selectedReviewId);
+  // Derive the effective review selection during render instead of syncing it in an effect.
+  const activeReviewId = reviewQueue.some((decision) => decision.id === selectedReviewId)
+    ? selectedReviewId
+    : reviewQueue[0]?.id ?? null;
+  const selectedDecision = reviewQueue.find((decision) => decision.id === activeReviewId);
   const pendingDecisionId = resolveDecisionMutation.isPending ? resolveDecisionMutation.variables?.decisionId : undefined;
   const reviewQueueTotal = reviewQueuePage?.total ?? health?.review_queue_count ?? reviewQueue.length;
   const bulkEligibleDecisionIds: number[] = [];
@@ -1946,16 +1954,6 @@ export default function App() {
       bulkEligibleDecisionIds.push(decision.id);
     }
   }
-
-  useEffect(() => {
-    if (reviewQueue.length === 0) {
-      setSelectedReviewId(null);
-      return;
-    }
-    if (!selectedReviewId || !reviewQueue.some((decision) => decision.id === selectedReviewId)) {
-      setSelectedReviewId(reviewQueue[0].id);
-    }
-  }, [reviewQueue, selectedReviewId]);
 
   const filteredWatchlist = useMemo(() => {
     const source = allProducts.length > 0 ? allProducts : visibleProducts;
@@ -2189,7 +2187,7 @@ export default function App() {
 
   const content = useMemo(
     () => renderContent(),
-    [screen, screenMeta, productsQuery.isLoading, productsQuery.data, visibleProducts, catalogMode, selectedProductId, watchlistIds, compareIds, alerts, selectedDetail, historyQuery.data, detailQuery.isLoading, historyQuery.isLoading, visibleTrends, filteredWatchlist, allProducts, filteredAdminProducts, productsAdminQuery.isLoading, reviewQueueQuery.isLoading, reviewQueue, reviewQueueOffset, reviewQueueTotal, bulkEligibleDecisionIds, selectedReviewId, selectedDecision, pendingDecisionId, bulkTopCandidateMutation.isPending, bulkTopCandidateMutation.data, bulkTopCandidateMutation.error, resolveDecisionMutation.error, dataQuality, dataQualityQuery.isLoading, retailerSummaries, health, scrapeRuns, analyticsQuery.data, analyticsQuery.isLoading]
+    [screen, screenMeta, productsQuery.isLoading, productsQuery.data, visibleProducts, catalogMode, selectedProductId, watchlistIds, compareIds, alerts, selectedDetail, historyQuery.data, detailQuery.isLoading, historyQuery.isLoading, visibleTrends, filteredWatchlist, allProducts, filteredAdminProducts, productsAdminQuery.isLoading, reviewQueueQuery.isLoading, reviewQueue, reviewQueueOffset, reviewQueueTotal, bulkEligibleDecisionIds, activeReviewId, selectedDecision, pendingDecisionId, bulkTopCandidateMutation.isPending, bulkTopCandidateMutation.data, bulkTopCandidateMutation.error, resolveDecisionMutation.error, dataQuality, dataQualityQuery.isLoading, retailerSummaries, health, scrapeRuns, analyticsQuery.data, analyticsQuery.isLoading]
   );
 
   function renderContent() {
@@ -2423,7 +2421,7 @@ export default function App() {
                 <button
                   key={decision.id}
                   type="button"
-                  className={`queue-item ${selectedReviewId === decision.id ? "active" : ""}`}
+                  className={`queue-item ${activeReviewId === decision.id ? "active" : ""}`}
                   onClick={() => setSelectedReviewId(decision.id)}
                 >
                   <div className="queue-item-top">
