@@ -13,5 +13,6 @@ APScheduler
 redis
 thefuzz
 python-Levenshtein
+setuptools
 pytest
 playwright
