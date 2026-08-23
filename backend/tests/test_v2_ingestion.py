@@ -7,6 +7,7 @@ from backend.app.database import (
     CanonicalProduct,
     Category,
     MatchDecision,
+    MatchDecisionEvent,
     MatchDecisionType,
     Offer,
     PriceObservation,
@@ -1002,6 +1003,136 @@ def test_native_v2_upsert_keeps_offer_denormalized_fields_in_sync(tmp_path):
         updated_offer = session.execute(select(Offer)).scalar_one()
         assert updated_offer.category_id == canonical.category_id == category.id
         assert updated_offer.previous_price == 1299.0
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_ingestion_writes_match_decision_audit_events(tmp_path):
+    database_path = tmp_path / "v2_audit.sqlite3"
+    engine = create_engine(f"sqlite:///{database_path}", connect_args={"check_same_thread": False})
+    SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    Base.metadata.create_all(bind=engine)
+
+    session = SessionLocal()
+    try:
+        retailer = Retailer(name="Audit Retailer", url="https://audit.example")
+        category = Category(name="Graphics Cards")
+        session.add_all([retailer, category])
+        session.commit()
+
+        scrape_run = start_scrape_run(session, retailer_id=retailer.id, scraper_name="audit_test")
+        upsert_v2_listing_snapshot(
+            session,
+            scrape_run=scrape_run,
+            retailer_id=retailer.id,
+            category_id=category.id,
+            category_name=category.name,
+            snapshot=V2ListingSnapshot(
+                name="Gigabyte RTX 5080 GAMING OC 16GB",
+                url="https://audit.example/gigabyte-5080",
+                price=1899.0,
+                status=ProductStatus.AVAILABLE,
+            ),
+        )
+        session.commit()
+
+        decision = session.execute(select(MatchDecision)).scalar_one()
+        initial_decision_value = decision.decision.value
+        events = session.execute(
+            select(MatchDecisionEvent).order_by(MatchDecisionEvent.id.asc())
+        ).scalars().all()
+        assert [event.event_type for event in events] == ["created"]
+        assert events[0].match_decision_id == decision.id
+        assert events[0].new_decision == decision.decision.value
+        assert events[0].source == "ingestion"
+
+        # A manual resolution should append a resolved event with the transition details.
+        canonical = session.execute(select(CanonicalProduct)).scalar_one()
+        resolve_match_decision(
+            session,
+            match_decision=decision,
+            decision=MatchDecisionType.MANUAL_MATCHED,
+            canonical_product=canonical,
+            rationale="Confirmed manually",
+        )
+        session.commit()
+
+        events = session.execute(
+            select(MatchDecisionEvent).order_by(MatchDecisionEvent.id.asc())
+        ).scalars().all()
+        assert [event.event_type for event in events] == ["created", "resolved"]
+        assert events[0].new_decision == initial_decision_value
+        resolved_event = events[1]
+        assert resolved_event.previous_decision == initial_decision_value
+        assert resolved_event.new_decision == MatchDecisionType.MANUAL_MATCHED.value
+        assert resolved_event.new_canonical_product_id == canonical.id
+        assert resolved_event.source == "manual_review"
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_ingestion_transition_appends_audit_event_without_duplicating_decisions(tmp_path):
+    database_path = tmp_path / "v2_audit_transition.sqlite3"
+    engine = create_engine(f"sqlite:///{database_path}", connect_args={"check_same_thread": False})
+    SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    Base.metadata.create_all(bind=engine)
+
+    session = SessionLocal()
+    try:
+        retailer = Retailer(name="Transition Retailer", url="https://transition.example")
+        category = Category(name="Graphics Cards")
+        session.add_all([retailer, category])
+        session.commit()
+
+        scrape_run = start_scrape_run(session, retailer_id=retailer.id, scraper_name="transition_test")
+        snapshot_kwargs = dict(
+            scrape_run=scrape_run,
+            retailer_id=retailer.id,
+            category_id=category.id,
+            category_name=category.name,
+        )
+        # First ingest creates a needs_review decision (weak candidate landscape).
+        upsert_v2_listing_snapshot(
+            session,
+            **snapshot_kwargs,
+            snapshot=V2ListingSnapshot(
+                name="Zotac RTX 5060 Twin Edge OC 8GB Special Revision Alpha",
+                url="https://transition.example/zotac-5060",
+                price=499.0,
+                status=ProductStatus.AVAILABLE,
+            ),
+        )
+        session.commit()
+
+        decisions_before = session.execute(select(MatchDecision)).scalars().all()
+        assert len(decisions_before) == 1
+
+        # Second ingest of the same listing must not duplicate decision rows.
+        upsert_v2_listing_snapshot(
+            session,
+            **snapshot_kwargs,
+            snapshot=V2ListingSnapshot(
+                name="Zotac RTX 5060 Twin Edge OC 8GB Special Revision Alpha",
+                url="https://transition.example/zotac-5060",
+                price=489.0,
+                status=ProductStatus.AVAILABLE,
+            ),
+        )
+        session.commit()
+
+        decisions_after = session.execute(select(MatchDecision)).scalars().all()
+        assert len(decisions_after) == 1
+        events = session.execute(
+            select(MatchDecisionEvent).order_by(MatchDecisionEvent.id.asc())
+        ).scalars().all()
+        # Unchanged decisions only carry their original created event.
+        assert all(event.event_type in {"created", "ingest_transition"} for event in events)
+        assert events[0].event_type == "created"
+        for event in events[1:]:
+            assert event.source == "ingestion"
+            assert event.previous_decision is not None
     finally:
         session.close()
         engine.dispose()

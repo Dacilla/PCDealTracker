@@ -755,6 +755,66 @@ def test_v2_match_decision_manual_match_rejects_mismatched_category(client, popu
     assert response.json()["detail"] == "Canonical product category must match the listing category."
 
 
+def test_v2_match_decision_history_records_resolution(client, populate_db):
+    decision_id = populate_db["review_decision_id"]
+
+    before = client.get(f"/api/v2/match-decisions/{decision_id}/history")
+    assert before.status_code == 200
+    assert before.json()["decision_id"] == decision_id
+    assert before.json()["events"] == []
+
+    resolve_response = client.patch(
+        f"/api/v2/match-decisions/{decision_id}",
+        json={
+            "decision": "manual_matched",
+            "canonical_product_id": populate_db["gpu_product_id"],
+            "rationale": "Confirmed same card after review",
+        },
+        headers={"X-API-Key": "change-me"},
+    )
+    assert resolve_response.status_code == 200
+
+    after = client.get(f"/api/v2/match-decisions/{decision_id}/history")
+    assert after.status_code == 200
+    payload = after.json()
+    assert payload["decision_id"] == decision_id
+    events = payload["events"]
+    assert len(events) == 1
+
+    event = events[0]
+    assert event["event_type"] == "resolved"
+    assert event["previous_decision"] == "needs_review"
+    assert event["new_decision"] == "manual_matched"
+    assert event["previous_canonical_product_id"] is None
+    assert event["new_canonical_product_id"] == int(populate_db["gpu_product_id"])
+    assert event["source"] == "manual_review"
+    assert event["matcher"] == "manual_review"
+    assert event["rationale"] == "Confirmed same card after review"
+    assert event["created_at"] is not None
+
+
+def test_v2_match_decision_history_tags_bulk_review_source(client, populate_db):
+    bulk_response = client.post(
+        "/api/v2/match-decisions/bulk-apply-top-candidates",
+        json={"decision_ids": [populate_db["review_decision_id"]], "min_score": 95.0},
+        headers={"X-API-Key": "change-me"},
+    )
+    assert bulk_response.status_code == 200
+    assert bulk_response.json()["resolved_ids"] == [populate_db["review_decision_id"]]
+
+    history = client.get(f"/api/v2/match-decisions/{populate_db['review_decision_id']}/history")
+    assert history.status_code == 200
+    events = history.json()["events"]
+    assert len(events) == 1
+    assert events[0]["event_type"] == "resolved"
+    assert events[0]["source"] == "bulk_review"
+
+
+def test_v2_match_decision_history_404_for_unknown_decision(client):
+    response = client.get("/api/v2/match-decisions/99999/history")
+    assert response.status_code == 404
+
+
 def test_v2_match_decision_patch_requires_api_key(client, populate_db):
     response = client.patch(
         f"/api/v2/match-decisions/{populate_db['review_decision_id']}",

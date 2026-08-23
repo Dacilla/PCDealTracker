@@ -245,6 +245,34 @@ class ScrapeRun(Base):
         return f"ScrapeRun(id={self.id!r}, status={self.status!r}, scraper_name={self.scraper_name!r})"
 
 
+class MatchDecisionEvent(Base):
+    __tablename__ = "match_decision_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    match_decision_id: Mapped[int] = mapped_column(
+        ForeignKey("match_decisions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    event_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    previous_decision: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    new_decision: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    previous_canonical_product_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    new_canonical_product_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    matcher: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    rationale: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    scrape_run_id: Mapped[Optional[int]] = mapped_column(ForeignKey("scrape_runs.id"), nullable=True, index=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utcnow_naive, index=True)
+
+    match_decision: Mapped["MatchDecision"] = relationship(back_populates="events")
+
+    def __repr__(self) -> str:
+        return (
+            f"MatchDecisionEvent(id={self.id!r}, match_decision_id={self.match_decision_id!r}, "
+            f"event_type={self.event_type!r})"
+        )
+
+
 class MatchDecision(Base):
     __tablename__ = "match_decisions"
 
@@ -271,6 +299,11 @@ class MatchDecision(Base):
     retailer_listing: Mapped["RetailerListing"] = relationship(back_populates="match_decisions")
     canonical_product: Mapped[Optional["CanonicalProduct"]] = relationship(back_populates="match_decisions")
     scrape_run: Mapped[Optional["ScrapeRun"]] = relationship(back_populates="match_decisions")
+    events: Mapped[List["MatchDecisionEvent"]] = relationship(
+        back_populates="match_decision",
+        cascade="all, delete-orphan",
+        order_by="MatchDecisionEvent.id",
+    )
 
     def __repr__(self) -> str:
         return f"MatchDecision(id={self.id!r}, decision={self.decision!r}, confidence={self.confidence!r})"

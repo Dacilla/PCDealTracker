@@ -10,6 +10,7 @@ from ..database import (
     CanonicalProduct,
     Category,
     MatchDecision,
+    MatchDecisionEvent,
     MatchDecisionType,
     Offer,
     PriceObservation,
@@ -169,6 +170,26 @@ class V2BulkTopCandidateSkippedSchema(BaseModel):
 class V2BulkTopCandidateResponse(BaseModel):
     resolved_ids: List[int]
     skipped: List[V2BulkTopCandidateSkippedSchema]
+
+
+class V2MatchDecisionEventSchema(BaseModel):
+    id: int
+    event_type: str
+    previous_decision: Optional[str] = None
+    new_decision: Optional[str] = None
+    previous_canonical_product_id: Optional[int] = None
+    new_canonical_product_id: Optional[int] = None
+    confidence: Optional[float] = None
+    matcher: Optional[str] = None
+    rationale: Optional[str] = None
+    source: Optional[str] = None
+    scrape_run_id: Optional[int] = None
+    created_at: datetime.datetime
+
+
+class V2MatchDecisionHistoryResponseSchema(BaseModel):
+    decision_id: int
+    events: List[V2MatchDecisionEventSchema]
 
 
 class V2MatchCandidateSchema(BaseModel):
@@ -1400,6 +1421,39 @@ def list_match_candidates(
     return [_match_candidate_schema(candidate) for candidate in ranked_candidates]
 
 
+@router.get(
+    "/match-decisions/{decision_id}/history",
+    response_model=V2MatchDecisionHistoryResponseSchema,
+)
+def get_match_decision_history(decision_id: int, db: Session = Depends(get_db)):
+    match_decision = _get_match_decision_or_404(db, decision_id)
+    events = db.execute(
+        select(MatchDecisionEvent)
+        .where(MatchDecisionEvent.match_decision_id == match_decision.id)
+        .order_by(MatchDecisionEvent.id.asc())
+    ).scalars().all()
+    return V2MatchDecisionHistoryResponseSchema(
+        decision_id=match_decision.id,
+        events=[
+            V2MatchDecisionEventSchema(
+                id=event.id,
+                event_type=event.event_type,
+                previous_decision=event.previous_decision,
+                new_decision=event.new_decision,
+                previous_canonical_product_id=event.previous_canonical_product_id,
+                new_canonical_product_id=event.new_canonical_product_id,
+                confidence=event.confidence,
+                matcher=event.matcher,
+                rationale=event.rationale,
+                source=event.source,
+                scrape_run_id=event.scrape_run_id,
+                created_at=event.created_at,
+            )
+            for event in events
+        ],
+    )
+
+
 @router.patch("/match-decisions/{decision_id}", response_model=V2MatchDecisionSchema)
 def patch_match_decision(
     decision_id: int,
@@ -1484,6 +1538,7 @@ def bulk_apply_top_candidates(
                 decision=MatchDecisionType.MANUAL_MATCHED,
                 canonical_product=top_candidate.canonical_product,
                 rationale=f"Bulk accepted top candidate {top_candidate.canonical_product.canonical_name}",
+                source="bulk_review",
             )
         except ValueError as exc:
             skipped.append(V2BulkTopCandidateSkippedSchema(decision_id=decision_id, reason=str(exc)))

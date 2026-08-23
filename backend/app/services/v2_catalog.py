@@ -10,6 +10,7 @@ from thefuzz import fuzz
 from ..database import (
     CanonicalProduct,
     MatchDecision,
+    MatchDecisionEvent,
     MatchDecisionType,
     Offer,
     PriceObservation,
@@ -320,6 +321,38 @@ def _plan_match_resolution(
     )
 
 
+def _record_match_decision_event(
+    db: Session,
+    *,
+    match_decision: MatchDecision,
+    event_type: str,
+    previous_decision: Optional[MatchDecisionType],
+    previous_canonical_product_id: Optional[int],
+    new_decision: MatchDecisionType,
+    new_canonical_product_id: Optional[int],
+    confidence: Optional[float],
+    matcher: str,
+    rationale: str,
+    source: str,
+    scrape_run_id: Optional[int] = None,
+) -> None:
+    db.add(
+        MatchDecisionEvent(
+            match_decision_id=match_decision.id,
+            event_type=event_type,
+            previous_decision=previous_decision.value if previous_decision is not None else None,
+            new_decision=new_decision.value,
+            previous_canonical_product_id=previous_canonical_product_id,
+            new_canonical_product_id=new_canonical_product_id,
+            confidence=confidence,
+            matcher=matcher,
+            rationale=rationale,
+            source=source,
+            scrape_run_id=scrape_run_id,
+        )
+    )
+
+
 def _persist_match_decision(
     db: Session,
     *,
@@ -355,6 +388,32 @@ def _persist_match_decision(
         existing_decision.fingerprint = fingerprint
         return existing_decision
 
+    if existing_decision is not None:
+        # The latest decision changed during ingestion; keep an audit trail of the transition.
+        _record_match_decision_event(
+            db,
+            match_decision=existing_decision,
+            event_type="ingest_transition",
+            previous_decision=existing_decision.decision,
+            previous_canonical_product_id=existing_decision.canonical_product_id,
+            new_decision=decision,
+            new_canonical_product_id=canonical_product_id,
+            confidence=confidence,
+            matcher=matcher,
+            rationale=rationale,
+            source="ingestion",
+            scrape_run_id=scrape_run.id,
+        )
+        existing_decision.retailer_listing_id = listing.id
+        existing_decision.canonical_product_id = canonical_product_id
+        existing_decision.scrape_run_id = scrape_run.id
+        existing_decision.decision = decision
+        existing_decision.confidence = confidence
+        existing_decision.matcher = matcher
+        existing_decision.rationale = rationale
+        existing_decision.fingerprint = fingerprint
+        return existing_decision
+
     decision_row = MatchDecision(
         retailer_listing_id=listing.id,
         canonical_product_id=canonical_product_id,
@@ -366,6 +425,21 @@ def _persist_match_decision(
         fingerprint=fingerprint,
     )
     db.add(decision_row)
+    db.flush()
+    _record_match_decision_event(
+        db,
+        match_decision=decision_row,
+        event_type="created",
+        previous_decision=None,
+        previous_canonical_product_id=None,
+        new_decision=decision,
+        new_canonical_product_id=canonical_product_id,
+        confidence=confidence,
+        matcher=matcher,
+        rationale=rationale,
+        source="ingestion",
+        scrape_run_id=scrape_run.id,
+    )
     return decision_row
 
 
@@ -623,11 +697,15 @@ def resolve_match_decision(
     decision: MatchDecisionType,
     canonical_product: Optional[CanonicalProduct] = None,
     rationale: Optional[str] = None,
+    source: str = "manual_review",
 ) -> MatchDecision:
     if decision not in (MatchDecisionType.MANUAL_MATCHED, MatchDecisionType.MANUAL_REJECTED):
         raise ValueError("Only manual match decisions can be resolved through this workflow")
     if decision == MatchDecisionType.MANUAL_MATCHED and canonical_product is None:
         raise ValueError("Manual matches require a target canonical product")
+
+    previous_decision = match_decision.decision
+    previous_canonical_product_id = match_decision.canonical_product_id
 
     offers = db.execute(
         select(Offer).where(Offer.retailer_listing_id == match_decision.retailer_listing_id)
@@ -656,6 +734,21 @@ def resolve_match_decision(
     match_decision.confidence = 1.0
     if rationale is not None:
         match_decision.rationale = rationale
+
+    _record_match_decision_event(
+        db,
+        match_decision=match_decision,
+        event_type="resolved",
+        previous_decision=previous_decision,
+        previous_canonical_product_id=previous_canonical_product_id,
+        new_decision=decision,
+        new_canonical_product_id=match_decision.canonical_product_id,
+        confidence=1.0,
+        matcher="manual_review",
+        rationale=match_decision.rationale or "",
+        source=source,
+        scrape_run_id=match_decision.scrape_run_id,
+    )
 
     db.flush()
     return match_decision
