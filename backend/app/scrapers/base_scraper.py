@@ -163,6 +163,8 @@ class BaseScraper:
         self.shutdown_event = shutdown_event
         self.item_errors = 0
         self.category_errors = 0
+        self.page_retries = 0
+        self.page_retries_by_type: Counter[str] = Counter()
         self.gate_waits = 0
         self.gate_clears = 0
         self.gate_failures = 0
@@ -187,7 +189,11 @@ class BaseScraper:
     def get_page_content(self, url: str, wait_for_selector: str) -> BeautifulSoup | None:
         """
         Fetches page content, explicitly waiting for a key element to be present.
-        If the wait times out, it logs a warning but proceeds with parsing.
+
+        Transient page load failures are retried up to scraper_page_load_retries
+        times with a backoff before giving up and saving debug artifacts. A
+        selector timeout is not retried: the page did load, so the partially
+        rendered content is parsed as-is.
         """
         if self.shutdown_event.is_set():
             print("Shutdown signal received, stopping navigation.")
@@ -195,41 +201,58 @@ class BaseScraper:
 
         if not self.driver:
             return None
-            
-        try:
-            if url:
-                print(f"Navigating to {url}...")
-                self.driver.get(url)
 
-            self._wait_for_selector_or_gate_clear(wait_for_selector)
-            print("Selector found. Page is ready.")
-            time.sleep(1)
-            return BeautifulSoup(self.driver.page_source, 'html.parser')
+        max_attempts = max(1, settings.scraper_page_load_retries + 1)
+        last_error: Exception | None = None
 
-        except TimeoutException:
-            print(f"  -- WARNING: Timed out waiting for '{wait_for_selector}' at {url or self.driver.current_url}.")
-            print("  -- Proceeding to parse the page content that has loaded so far.")
-            return BeautifulSoup(self.driver.page_source, 'html.parser')
-
-        except Exception as e:
-            print(f"Error fetching or waiting for content at {url or self.driver.current_url}.")
-            print(f"Underlying error: {e}")
-            
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            screenshot_filename = f"debug_screenshot_{timestamp}.png"
-            html_filename = f"debug_page_content_{timestamp}.html"
-            
+        for attempt in range(1, max_attempts + 1):
             try:
-                self.driver.save_screenshot(screenshot_filename)
-                print(f"Saved a screenshot to {screenshot_filename} for inspection.")
-                
-                with open(html_filename, "w", encoding="utf-8") as f:
-                    f.write(self.driver.page_source)
-                print(f"Saved the page HTML to {html_filename} for inspection.")
+                if url:
+                    print(f"Navigating to {url}...")
+                    self.driver.get(url)
 
-            except Exception as se:
-                print(f"Could not save debug files: {se}")
-            return None
+                self._wait_for_selector_or_gate_clear(wait_for_selector)
+                print("Selector found. Page is ready.")
+                time.sleep(1)
+                return BeautifulSoup(self.driver.page_source, 'html.parser')
+
+            except TimeoutException:
+                print(f"  -- WARNING: Timed out waiting for '{wait_for_selector}' at {url or self.driver.current_url}.")
+                print("  -- Proceeding to parse the page content that has loaded so far.")
+                return BeautifulSoup(self.driver.page_source, 'html.parser')
+
+            except Exception as e:
+                last_error = e
+                if attempt >= max_attempts or self.shutdown_event.is_set():
+                    break
+                self.record_page_retry(type(e).__name__)
+                backoff = max(0.0, settings.scraper_retry_backoff_seconds)
+                print(
+                    f"  -- Page load failed ({e}). Retrying in {backoff:.0f}s "
+                    f"(attempt {attempt + 1}/{max_attempts})..."
+                )
+                if backoff:
+                    time.sleep(backoff)
+
+        print(f"Error fetching or waiting for content at {url or self.driver.current_url} after {max_attempts} attempt(s).")
+        if last_error is not None:
+            print(f"Underlying error: {last_error}")
+
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        screenshot_filename = f"debug_screenshot_{timestamp}.png"
+        html_filename = f"debug_page_content_{timestamp}.html"
+
+        try:
+            self.driver.save_screenshot(screenshot_filename)
+            print(f"Saved a screenshot to {screenshot_filename} for inspection.")
+
+            with open(html_filename, "w", encoding="utf-8") as f:
+                f.write(self.driver.page_source)
+            print(f"Saved the page HTML to {html_filename} for inspection.")
+
+        except Exception as se:
+            print(f"Could not save debug files: {se}")
+        return None
 
     def _wait_for_selector_or_gate_clear(self, wait_for_selector: str) -> None:
         print(f"Waiting for selector '{wait_for_selector}' to be present...")
@@ -264,6 +287,12 @@ class BaseScraper:
     def record_item_error(self, detail: str) -> None:
         self.item_errors = getattr(self, "item_errors", 0) + 1
         print(f"  Could not ingest an item into v2. Error: {detail}")
+
+    def record_page_retry(self, error_type: str) -> None:
+        if not hasattr(self, "page_retries_by_type") or self.page_retries_by_type is None:
+            self.page_retries_by_type = Counter()
+        self.page_retries = getattr(self, "page_retries", 0) + 1
+        self.page_retries_by_type[error_type] = self.page_retries_by_type.get(error_type, 0) + 1
 
     def record_category_error(self, detail: str) -> None:
         self.category_errors = getattr(self, "category_errors", 0) + 1
@@ -311,6 +340,11 @@ class BaseScraper:
             parts.append(f"{self.category_errors} category/page failures")
         if getattr(self, "item_errors", 0):
             parts.append(f"{self.item_errors} item failures")
+        retries = getattr(self, "page_retries", 0)
+        if retries:
+            retry_types = self._format_counter_summary(getattr(self, "page_retries_by_type", Counter()))
+            suffix = f" ({retry_types})" if retry_types else ""
+            parts.append(f"{retries} page load retries{suffix}")
         gate_summary = self.gate_summary()
         if gate_summary:
             parts.append(gate_summary)

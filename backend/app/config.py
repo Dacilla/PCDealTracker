@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     scraper_browser_major_version: int | None = None
     scraper_page_timeout_seconds: int = 15
     scraper_challenge_timeout_seconds: int = 45
+    scraper_page_load_retries: int = 2
+    scraper_retry_backoff_seconds: float = 3.0
 
     # API settings
     api_host: str = "0.0.0.0"

@@ -34,6 +34,7 @@ class _ExplodingDriver:
 def test_get_page_content_uses_month_in_debug_timestamp(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("backend.app.scrapers.base_scraper.datetime.datetime", _FixedDateTime)
+    monkeypatch.setattr(settings, "scraper_page_load_retries", 0)
 
     scraper = object.__new__(BaseScraper)
     scraper.driver = _ExplodingDriver()
@@ -44,6 +45,94 @@ def test_get_page_content_uses_month_in_debug_timestamp(monkeypatch, tmp_path):
     assert result is None
     assert scraper.driver.screenshot_filename == "debug_screenshot_20260409_171700.png"
     assert (tmp_path / "debug_page_content_20260409_171700.html").exists()
+
+
+def test_get_page_content_retries_transient_failures_and_recovers(monkeypatch):
+    monkeypatch.setattr(settings, "scraper_page_load_retries", 2)
+    monkeypatch.setattr(settings, "scraper_retry_backoff_seconds", 0)
+
+    attempts = []
+
+    class _RecoveringDriver:
+        page_source = "<html>ready</html>"
+
+        def get(self, url: str):
+            attempts.append(url)
+            if len(attempts) == 1:
+                raise RuntimeError("net::ERR_CONNECTION_RESET")
+
+    scraper = object.__new__(BaseScraper)
+    scraper.driver = _RecoveringDriver()
+    scraper.shutdown_event = threading.Event()
+    scraper.page_retries = 0
+    scraper.page_retries_by_type = {}
+    monkeypatch.setattr(scraper, "_wait_for_selector_or_gate_clear", lambda selector: None)
+    monkeypatch.setattr("backend.app.scrapers.base_scraper.time.sleep", lambda seconds: None)
+    monkeypatch.setattr("backend.app.scrapers.base_scraper.time.sleep", lambda seconds: None)
+
+    result = scraper.get_page_content("https://example.com", ".content")
+
+    assert result is not None
+    assert len(attempts) == 2
+    assert scraper.page_retries == 1
+    assert scraper.page_retries_by_type == {"RuntimeError": 1}
+
+
+def test_get_page_content_records_retries_in_error_summary(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(settings, "scraper_page_load_retries", 1)
+    monkeypatch.setattr(settings, "scraper_retry_backoff_seconds", 0)
+    monkeypatch.setattr("backend.app.scrapers.base_scraper.time.sleep", lambda seconds: None)
+
+    class _AlwaysFailingDriver:
+        page_source = "<html>debug</html>"
+        current_url = "https://example.com"
+
+        def get(self, url: str):
+            raise RuntimeError("boom")
+
+        def save_screenshot(self, filename: str):
+            return True
+
+    scraper = object.__new__(BaseScraper)
+    scraper.driver = _AlwaysFailingDriver()
+    scraper.shutdown_event = threading.Event()
+    scraper.item_errors = 0
+    scraper.category_errors = 0
+    scraper.gate_waits = 0
+    scraper.gate_clears = 0
+    scraper.gate_failures = 0
+
+    result = scraper.get_page_content("https://example.com", ".content")
+
+    assert result is None
+    assert scraper.error_summary() == "1 page load retries (RuntimeError:1)"
+
+
+def test_get_page_content_does_not_retry_on_selector_timeout(monkeypatch):
+    from selenium.common.exceptions import TimeoutException
+
+    calls = []
+
+    class _SlowPageDriver:
+        page_source = "<html>partial</html>"
+
+        def get(self, url: str):
+            calls.append(url)
+
+    scraper = object.__new__(BaseScraper)
+    scraper.driver = _SlowPageDriver()
+    scraper.shutdown_event = threading.Event()
+
+    def _raise_timeout(selector):
+        raise TimeoutException()
+
+    monkeypatch.setattr(scraper, "_wait_for_selector_or_gate_clear", _raise_timeout)
+
+    result = scraper.get_page_content("https://example.com", ".content")
+
+    assert result is not None
+    assert len(calls) == 1
 
 
 def test_base_scraper_reports_partial_status_and_error_summary():
