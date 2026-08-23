@@ -2,24 +2,29 @@ import { lazy, startTransition, Suspense, useDeferredValue, useEffect, useMemo, 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   bulkApplyTopCandidates,
+  fetchAnalyticsSummary,
   fetchDataQuality,
   fetchFilters,
   fetchHealth,
   fetchHistory,
   fetchMatchCandidates,
+  fetchMatchDecisionHistory,
   fetchMatchDecisions,
   fetchProduct,
   fetchProducts,
   fetchScrapeRuns,
   fetchTrends,
   getApiBase,
+  hasReviewApiKey,
   resolveMatchDecision
 } from "./api";
 import type {
+  AnalyticsSummary,
   DataQualityPayload,
   HistoryPayload,
   MatchCandidate,
   MatchDecision,
+  MatchDecisionEvent,
   MatchDecisionResolutionPayload,
   ProductDetail,
   ProductSummary,
@@ -168,13 +173,13 @@ const SCREEN_META: Record<Screen, { title: string; subtitle: string; implemented
   },
   analytics: {
     title: "Analytics",
-    subtitle: "The design reserves an analytics surface, but the live app does not provide dedicated analytics endpoints yet.",
-    implemented: false
+    subtitle: "Aggregate catalog insights across categories, brands, and retailer coverage.",
+    implemented: true
   },
   settings: {
     title: "Settings",
-    subtitle: "Settings are not yet implemented in the live product.",
-    implemented: false
+    subtitle: "Review the API connection, review key status, and manage locally stored data.",
+    implemented: true
   }
 };
 
@@ -743,6 +748,52 @@ function ProductDetailPanel({
   );
 }
 
+function DecisionAuditHistory({ decisionId }: { decisionId: number }) {
+  const historyQuery = useQuery({
+    queryKey: ["review-history", decisionId],
+    queryFn: () => fetchMatchDecisionHistory(decisionId)
+  });
+
+  const events = historyQuery.data?.events ?? [];
+
+  return (
+    <div className="candidate-stack">
+      <div className="panel-head">
+        <span>Audit history</span>
+        <span className="mono">{events.length}</span>
+      </div>
+      {historyQuery.isLoading ? <div className="panel-empty">Loading decision history…</div> : null}
+      {!historyQuery.isLoading && events.length === 0 ? (
+        <div className="panel-empty">No recorded transitions for this decision yet.</div>
+      ) : null}
+      <div className="history-events">
+        {events.map((event: MatchDecisionEvent) => {
+          const transition =
+            event.previous_decision && event.previous_decision !== event.new_decision
+              ? `${formatStatusLabel(event.previous_decision)} → ${formatStatusLabel(event.new_decision)}`
+              : formatStatusLabel(event.new_decision ?? event.event_type);
+          return (
+            <div key={event.id} className="candidate-row history-row">
+              <div>
+                <strong>{transition}</strong>
+                <span>
+                  {formatStatusLabel(event.event_type)} · {formatStatusLabel(event.source ?? "unknown")}
+                  {event.matcher ? ` · ${formatStatusLabel(event.matcher)}` : ""}
+                </span>
+                {event.rationale ? <span className="detail-subcopy">{event.rationale}</span> : null}
+              </div>
+              <div className="candidate-metrics">
+                {event.confidence != null ? <strong>{(event.confidence * 100).toFixed(0)}%</strong> : null}
+                <span>{formatTimestamp(event.created_at)}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function ReviewDetail({
   decision,
   pendingDecisionId,
@@ -896,6 +947,8 @@ function ReviewDetail({
           Reject listing
         </button>
       </div>
+
+      <DecisionAuditHistory decisionId={decision.id} />
     </div>
   );
 }
@@ -1504,6 +1557,186 @@ function ProductsScreen({
   );
 }
 
+function AnalyticsScreen({
+  analytics,
+  loading
+}: {
+  analytics?: AnalyticsSummary;
+  loading: boolean;
+}) {
+  if (loading) {
+    return <div className="panel-empty">Loading catalog analytics…</div>;
+  }
+
+  if (!analytics) {
+    return (
+      <div className="panel-empty">
+        Analytics are unavailable because the persisted v2 catalog is empty. Run a scrape first.
+      </div>
+    );
+  }
+
+  const maxBrandCount = Math.max(1, ...analytics.brand_breakdown.map((row) => row.product_count));
+
+  return (
+    <section className="workspace">
+      <div className="stat-grid">
+        <StatCard label="Canonical products" value={formatNumber(analytics.canonical_product_count)} sublabel="Active in catalog" />
+        <StatCard label="Priced offers" value={formatNumber(analytics.active_offer_count)} sublabel="Available with price" />
+        <StatCard label="Retailers tracked" value={formatNumber(analytics.tracked_retailer_count)} sublabel={`of ${analytics.retailer_coverage.length} configured`} />
+        <StatCard label="Categories tracked" value={formatNumber(analytics.tracked_category_count)} sublabel="With live coverage" />
+      </div>
+
+      <div className="workspace-columns">
+        <div className="panel table-panel">
+          <div className="section-strip">
+            <span className="section-title">Category breakdown</span>
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Category</th>
+                  <th>Products</th>
+                  <th>Offers</th>
+                  <th>Avg best</th>
+                  <th>Best low</th>
+                </tr>
+              </thead>
+              <tbody>
+                {analytics.category_breakdown.map((row) => (
+                  <tr key={row.category.id}>
+                    <td>{row.category.name}</td>
+                    <td className="mono">{formatNumber(row.product_count)}</td>
+                    <td className="mono">{formatNumber(row.active_offer_count)}</td>
+                    <td className="mono">{formatCurrency(row.avg_best_price)}</td>
+                    <td className="mono">{formatCurrency(row.min_best_price)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="panel table-panel">
+          <div className="section-strip">
+            <span className="section-title">Top brands</span>
+          </div>
+          <div className="brand-bars">
+            {analytics.brand_breakdown.map((row) => (
+              <div key={row.brand} className="brand-bar-row">
+                <span className="brand-bar-label">{row.brand}</span>
+                <div className="brand-bar-track">
+                  <div
+                    className="brand-bar-fill"
+                    style={{ width: `${Math.round((row.product_count / maxBrandCount) * 100)}%` }}
+                  />
+                </div>
+                <span className="mono brand-bar-value">
+                  {formatNumber(row.product_count)} · {formatCurrency(row.avg_best_price)}
+                </span>
+              </div>
+            ))}
+            {analytics.brand_breakdown.length === 0 ? (
+              <div className="panel-empty">No branded products tracked yet.</div>
+            ) : null}
+          </div>
+        </div>
+      </div>
+
+      <div className="panel table-panel">
+        <div className="section-strip">
+          <span className="section-title">Retailer coverage</span>
+        </div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Retailer</th>
+                <th>Offers</th>
+                <th>Products covered</th>
+                <th>Avg price</th>
+                <th>Lowest price</th>
+              </tr>
+            </thead>
+            <tbody>
+              {analytics.retailer_coverage.map((row) => (
+                <tr key={row.retailer.id}>
+                  <td>{row.retailer.name}</td>
+                  <td className="mono">{formatNumber(row.active_offer_count)}</td>
+                  <td className="mono">{formatNumber(row.distinct_product_count)}</td>
+                  <td className="mono">{formatCurrency(row.avg_offer_price)}</td>
+                  <td className="mono">{formatCurrency(row.min_offer_price)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function SettingsScreen({
+  watchlistCount,
+  compareCount,
+  alertsCount,
+  onResetLocalData
+}: {
+  watchlistCount: number;
+  compareCount: number;
+  alertsCount: number;
+  onResetLocalData: () => void;
+}) {
+  const reviewKeyConfigured = hasReviewApiKey();
+
+  return (
+    <section className="workspace">
+      <div className="workspace-columns">
+        <div className="panel">
+          <div className="panel-head">
+            <span>API connection</span>
+          </div>
+          <p className="detail-subcopy">
+            The frontend talks to the FastAPI backend at the base URL below, resolved from{" "}
+            <code>VITE_API_BASE_URL</code> at build time.
+          </p>
+          <p className="mono">{getApiBase()}</p>
+          <div className="inline-tags">
+            <span className="tag tag-green">Connected via /api/v2</span>
+            <span className={reviewKeyConfigured ? "tag tag-green" : "tag tag-amber"}>
+              Review key {reviewKeyConfigured ? "configured" : "missing"}
+            </span>
+          </div>
+          {!reviewKeyConfigured ? (
+            <p className="detail-subcopy">
+              Set <code>VITE_REVIEW_API_KEY</code> to match the backend <code>REVIEW_API_KEY</code> to enable review
+              queue actions.
+            </p>
+          ) : null}
+        </div>
+
+        <div className="panel">
+          <div className="panel-head">
+            <span>Locally stored data</span>
+          </div>
+          <p className="detail-subcopy">
+            Watchlist, compare tray, and price alerts live in this browser only and never leave your machine.
+          </p>
+          <div className="stat-grid settings-stats">
+            <StatCard label="Watchlist" value={formatNumber(watchlistCount)} sublabel="Products" />
+            <StatCard label="Compare tray" value={formatNumber(compareCount)} sublabel="Up to 4" />
+            <StatCard label="Price alerts" value={formatNumber(alertsCount)} sublabel="Targets" />
+          </div>
+          <button type="button" className="btn danger" onClick={onResetLocalData}>
+            Clear local data
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function PlaceholderScreen({ screen }: { screen: Screen }) {
   return (
     <section className="placeholder-screen">
@@ -1571,6 +1804,12 @@ export default function App() {
     queryKey: ["v2-data-quality"],
     queryFn: fetchDataQuality,
     enabled: screen === "dq"
+  });
+
+  const analyticsQuery = useQuery({
+    queryKey: ["v2-analytics"],
+    queryFn: fetchAnalyticsSummary,
+    enabled: screen === "analytics"
   });
 
   const productsQuery = useQuery({
@@ -1759,8 +1998,8 @@ export default function App() {
       dq: { key: "dq", label: "Data Quality", implemented: true },
       retailers: { key: "retailers", label: "Retailers", implemented: true },
       scraper: { key: "scraper", label: "Scraper Health", implemented: true },
-      analytics: { key: "analytics", label: "Analytics", implemented: false },
-      settings: { key: "settings", label: "Settings", implemented: false }
+      analytics: { key: "analytics", label: "Analytics", implemented: true },
+      settings: { key: "settings", label: "Settings", implemented: true }
     }),
     [alerts.length, compareIds.length, filteredWatchlist.length, reviewQueueTotal]
   );
@@ -1805,6 +2044,12 @@ export default function App() {
         ...current
       ];
     });
+  }
+
+  function handleResetLocalData() {
+    setWatchlistIds([]);
+    setCompareIds([]);
+    setAlerts([]);
   }
 
   function handleReviewSearchChange(value: string) {
@@ -1944,12 +2189,27 @@ export default function App() {
 
   const content = useMemo(
     () => renderContent(),
-    [screen, screenMeta, productsQuery.isLoading, productsQuery.data, visibleProducts, catalogMode, selectedProductId, watchlistIds, compareIds, selectedDetail, historyQuery.data, detailQuery.isLoading, historyQuery.isLoading, visibleTrends, filteredWatchlist, allProducts, alerts, filteredAdminProducts, productsAdminQuery.isLoading, reviewQueueQuery.isLoading, reviewQueue, reviewQueueOffset, reviewQueueTotal, bulkEligibleDecisionIds, selectedReviewId, selectedDecision, pendingDecisionId, bulkTopCandidateMutation.isPending, bulkTopCandidateMutation.data, bulkTopCandidateMutation.error, resolveDecisionMutation.error, dataQuality, dataQualityQuery.isLoading, retailerSummaries, health, scrapeRuns]
+    [screen, screenMeta, productsQuery.isLoading, productsQuery.data, visibleProducts, catalogMode, selectedProductId, watchlistIds, compareIds, alerts, selectedDetail, historyQuery.data, detailQuery.isLoading, historyQuery.isLoading, visibleTrends, filteredWatchlist, allProducts, filteredAdminProducts, productsAdminQuery.isLoading, reviewQueueQuery.isLoading, reviewQueue, reviewQueueOffset, reviewQueueTotal, bulkEligibleDecisionIds, selectedReviewId, selectedDecision, pendingDecisionId, bulkTopCandidateMutation.isPending, bulkTopCandidateMutation.data, bulkTopCandidateMutation.error, resolveDecisionMutation.error, dataQuality, dataQualityQuery.isLoading, retailerSummaries, health, scrapeRuns, analyticsQuery.data, analyticsQuery.isLoading]
   );
 
   function renderContent() {
     if (!screenMeta.implemented) {
       return <PlaceholderScreen screen={screen} />;
+    }
+
+    if (screen === "analytics") {
+      return <AnalyticsScreen analytics={analyticsQuery.data} loading={analyticsQuery.isLoading} />;
+    }
+
+    if (screen === "settings") {
+      return (
+        <SettingsScreen
+          watchlistCount={watchlistIds.length}
+          compareCount={compareIds.length}
+          alertsCount={alerts.length}
+          onResetLocalData={handleResetLocalData}
+        />
+      );
     }
 
     if (screen === "catalog") {

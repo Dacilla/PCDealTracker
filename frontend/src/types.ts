@@ -233,3 +233,56 @@ export type MatchCandidate = {
   score: number;
   reasons: string[];
 };
+
+export type MatchDecisionEvent = {
+  id: number;
+  event_type: string;
+  previous_decision?: string | null;
+  new_decision?: string | null;
+  previous_canonical_product_id?: number | null;
+  new_canonical_product_id?: number | null;
+  confidence?: number | null;
+  matcher?: string | null;
+  rationale?: string | null;
+  source?: string | null;
+  scrape_run_id?: number | null;
+  created_at: string;
+};
+
+export type MatchDecisionHistory = {
+  decision_id: number;
+  events: MatchDecisionEvent[];
+};
+
+export type AnalyticsCategoryRow = {
+  category: Category;
+  product_count: number;
+  active_offer_count: number;
+  avg_best_price?: number | null;
+  min_best_price?: number | null;
+  max_best_price?: number | null;
+};
+
+export type AnalyticsBrandRow = {
+  brand: string;
+  product_count: number;
+  avg_best_price?: number | null;
+};
+
+export type AnalyticsRetailerRow = {
+  retailer: Retailer;
+  active_offer_count: number;
+  distinct_product_count: number;
+  avg_offer_price?: number | null;
+  min_offer_price?: number | null;
+};
+
+export type AnalyticsSummary = {
+  canonical_product_count: number;
+  active_offer_count: number;
+  tracked_retailer_count: number;
+  tracked_category_count: number;
+  category_breakdown: AnalyticsCategoryRow[];
+  brand_breakdown: AnalyticsBrandRow[];
+  retailer_coverage: AnalyticsRetailerRow[];
+};

@@ -1194,3 +1194,75 @@ tbody tr:hover {
     padding: 16px;
   }
 }
+
+/* Analytics + Settings surfaces */
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.workspace-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+.brand-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.brand-bar-row {
+  display: grid;
+  grid-template-columns: minmax(90px, 150px) 1fr auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.brand-bar-label {
+  font-size: 13px;
+  color: var(--fg2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.brand-bar-track {
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(111, 125, 148, 0.16);
+  overflow: hidden;
+}
+
+.brand-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #58d4ff, #4ec89a);
+}
+
+.brand-bar-value {
+  font-size: 11px;
+  color: var(--fg3);
+}
+
+.settings-stats {
+  margin: 12px 0;
+}
+
+.history-events {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.history-row {
+  cursor: default;
+}
+
+.history-row:hover {
+  transform: none;
+}

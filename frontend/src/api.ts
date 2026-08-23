@@ -5,8 +5,10 @@ import type {
   FilterPayload,
   HealthPayload,
   HistoryPayload,
+  AnalyticsSummary,
   MatchCandidate,
   MatchDecision,
+  MatchDecisionHistory,
   MatchDecisionPage,
   MatchDecisionResolutionPayload,
   ProductDetail,
@@ -73,6 +75,10 @@ export function getApiBase() {
   return API_BASE;
 }
 
+export function hasReviewApiKey() {
+  return REVIEW_API_KEY.length > 0;
+}
+
 export function fetchProducts(params: Record<string, string | number | boolean | undefined>) {
   return fetchJson<ProductPage>("/products", params);
 }
@@ -119,4 +125,12 @@ export function resolveMatchDecision(decisionId: number, payload: MatchDecisionR
 
 export function bulkApplyTopCandidates(payload: BulkTopCandidatePayload) {
   return sendJson<BulkTopCandidateResult>("POST", "/match-decisions/bulk-apply-top-candidates", payload);
+}
+
+export function fetchAnalyticsSummary() {
+  return fetchJson<AnalyticsSummary>("/analytics/summary");
+}
+
+export function fetchMatchDecisionHistory(decisionId: number) {
+  return fetchJson<MatchDecisionHistory>(`/match-decisions/${decisionId}/history`);
 }
