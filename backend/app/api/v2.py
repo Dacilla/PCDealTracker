@@ -282,6 +282,39 @@ class V2DataQualityResponseSchema(BaseModel):
     issues: List[V2DataQualityIssueSchema] = []
 
 
+class V2AnalyticsCategorySchema(BaseModel):
+    category: V2CategorySchema
+    product_count: int
+    active_offer_count: int
+    avg_best_price: Optional[float] = None
+    min_best_price: Optional[float] = None
+    max_best_price: Optional[float] = None
+
+
+class V2AnalyticsBrandSchema(BaseModel):
+    brand: str
+    product_count: int
+    avg_best_price: Optional[float] = None
+
+
+class V2AnalyticsRetailerCoverageSchema(BaseModel):
+    retailer: V2RetailerSchema
+    active_offer_count: int
+    distinct_product_count: int
+    avg_offer_price: Optional[float] = None
+    min_offer_price: Optional[float] = None
+
+
+class V2AnalyticsSummarySchema(BaseModel):
+    canonical_product_count: int
+    active_offer_count: int
+    tracked_retailer_count: int
+    tracked_category_count: int
+    category_breakdown: List[V2AnalyticsCategorySchema]
+    brand_breakdown: List[V2AnalyticsBrandSchema]
+    retailer_coverage: List[V2AnalyticsRetailerCoverageSchema]
+
+
 router = APIRouter(prefix="/api/v2", tags=["V2"])
 
 
@@ -1083,6 +1116,136 @@ def get_data_quality(db: Session = Depends(get_db)):
         retailer_queue=retailer_queue,
         category_queue=category_queue,
         issues=issues,
+    )
+
+
+@router.get("/analytics/summary", response_model=V2AnalyticsSummarySchema)
+def get_analytics_summary(
+    db: Session = Depends(get_db),
+    brand_limit: int = Query(12, ge=1, le=50),
+):
+    _require_persisted_catalog(db)
+
+    available_offer = and_(
+        Offer.is_active.is_(True),
+        Offer.status == ProductStatus.AVAILABLE,
+        Offer.current_price.is_not(None),
+    )
+
+    best_price_stats = (
+        select(
+            CanonicalProduct.id.label("product_id"),
+            CanonicalProduct.category_id.label("category_id"),
+            CanonicalProduct.brand.label("brand"),
+            func.count(Offer.id).label("offer_count"),
+            func.min(Offer.current_price).label("best_price"),
+        )
+        .join(Offer, and_(Offer.canonical_product_id == CanonicalProduct.id, available_offer))
+        .where(CanonicalProduct.is_active.is_(True))
+        .group_by(CanonicalProduct.id, CanonicalProduct.category_id, CanonicalProduct.brand)
+        .subquery()
+    )
+
+    canonical_product_count = db.execute(
+        select(func.count())
+        .select_from(CanonicalProduct)
+        .where(CanonicalProduct.is_active.is_(True))
+    ).scalar_one()
+
+    category_rows = db.execute(
+        select(
+            Category.id,
+            func.count(best_price_stats.c.product_id),
+            func.sum(best_price_stats.c.offer_count),
+            func.avg(best_price_stats.c.best_price),
+            func.min(best_price_stats.c.best_price),
+            func.max(best_price_stats.c.best_price),
+        )
+        .select_from(Category)
+        .outerjoin(best_price_stats, best_price_stats.c.category_id == Category.id)
+        .group_by(Category.id)
+        .order_by(func.count(best_price_stats.c.product_id).desc(), Category.name.asc())
+    ).all()
+    product_count_by_category = {row[0]: row for row in category_rows}
+
+    tracked_category_ids = [
+        category_id
+        for category_id, product_count, *_ in category_rows
+        if product_count > 0
+    ]
+
+    brand_rows = db.execute(
+        select(
+            best_price_stats.c.brand,
+            func.count(),
+            func.avg(best_price_stats.c.best_price),
+        )
+        .where(best_price_stats.c.brand.is_not(None), best_price_stats.c.brand != "")
+        .group_by(best_price_stats.c.brand)
+        .order_by(func.count().desc(), best_price_stats.c.brand.asc())
+        .limit(brand_limit)
+    ).all()
+
+    retailer_rows = db.execute(
+        select(
+            Retailer.id,
+            func.count(Offer.id),
+            func.count(func.distinct(Offer.canonical_product_id)),
+            func.avg(Offer.current_price),
+            func.min(Offer.current_price),
+        )
+        .select_from(Retailer)
+        .outerjoin(Offer, and_(Offer.retailer_id == Retailer.id, available_offer))
+        .group_by(Retailer.id)
+        .order_by(func.count(func.distinct(Offer.canonical_product_id)).desc(), Retailer.name.asc())
+    ).all()
+    retailers_by_id = {
+        retailer.id: retailer
+        for retailer in db.execute(select(Retailer)).scalars().all()
+    }
+    categories_by_id = {
+        category.id: category
+        for category in db.execute(select(Category)).scalars().all()
+    }
+
+    total_active_offers = sum(row[2] or 0 for row in retailer_rows)
+    tracked_retailer_count = sum(1 for row in retailer_rows if (row[1] or 0) > 0)
+
+    return V2AnalyticsSummarySchema(
+        canonical_product_count=canonical_product_count,
+        active_offer_count=total_active_offers,
+        tracked_retailer_count=tracked_retailer_count,
+        tracked_category_count=len(tracked_category_ids),
+        category_breakdown=[
+            V2AnalyticsCategorySchema(
+                category=_category_schema(categories_by_id[row[0]]),
+                product_count=row[1] or 0,
+                active_offer_count=row[2] or 0,
+                avg_best_price=round(row[3], 2) if row[3] is not None else None,
+                min_best_price=row[4],
+                max_best_price=row[5],
+            )
+            for row in category_rows
+        ],
+        brand_breakdown=[
+            V2AnalyticsBrandSchema(
+                brand=row[0],
+                product_count=row[1],
+                avg_best_price=round(row[2], 2) if row[2] is not None else None,
+            )
+            for row in brand_rows
+        ],
+        retailer_coverage=[
+            V2AnalyticsRetailerCoverageSchema(
+                retailer=_retailer_schema(retailers_by_id[row[0]]),
+                active_offer_count=row[1] or 0,
+                distinct_product_count=row[2] or 0,
+                avg_offer_price=round(row[3], 2) if row[3] is not None else None,
+                min_offer_price=row[4],
+            )
+            for row in retailer_rows
+            if row[0] in retailers_by_id
+        ],
     )
 
 

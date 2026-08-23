@@ -755,6 +755,42 @@ def test_v2_match_decision_manual_match_rejects_mismatched_category(client, popu
     assert response.json()["detail"] == "Canonical product category must match the listing category."
 
 
+def test_v2_analytics_summary_aggregates_catalog(client, populate_db):
+    response = client.get("/api/v2/analytics/summary")
+    assert response.status_code == 200
+
+    data = response.json()
+    assert data["canonical_product_count"] == 3
+    # Only priced, active, available offers count: the legacy GPU offer is
+    # unavailable/inactive and one CPU offer carries no price.
+    assert data["active_offer_count"] == 3
+    assert data["tracked_retailer_count"] == 2
+
+    gpu_category = next(
+        item for item in data["category_breakdown"] if item["category"]["name"] == "Graphics Cards"
+    )
+    cpu_category = next(
+        item for item in data["category_breakdown"] if item["category"]["name"] == "CPUs"
+    )
+    assert gpu_category["product_count"] == 1
+    assert gpu_category["active_offer_count"] == 2
+    assert gpu_category["min_best_price"] == 950.0
+    assert cpu_category["product_count"] == 1
+    assert cpu_category["active_offer_count"] == 1
+    assert cpu_category["avg_best_price"] == 600.0
+
+    asus_brand = next(item for item in data["brand_breakdown"] if item["brand"] == "ASUS")
+    assert asus_brand["product_count"] == 1
+    assert asus_brand["avg_best_price"] == 950.0
+
+    retailer_names = {item["retailer"]["name"]: item for item in data["retailer_coverage"]}
+    assert set(retailer_names) == {"TestRetailer A", "TestRetailer B"}
+    assert retailer_names["TestRetailer A"]["distinct_product_count"] == 2
+    assert retailer_names["TestRetailer A"]["active_offer_count"] == 2
+    assert retailer_names["TestRetailer A"]["min_offer_price"] == 600.0
+    assert retailer_names["TestRetailer B"]["distinct_product_count"] == 1
+
+
 def test_v2_match_decision_history_records_resolution(client, populate_db):
     decision_id = populate_db["review_decision_id"]
 
